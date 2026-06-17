@@ -10,7 +10,7 @@ suricata_guard.py  v4.0
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Outil développé et signé par : 12ak_H4ck
-   (Aledji Ar-Rachad)
+
    Cette signature fait partie intégrante de l'outil — ne pas retirer.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
