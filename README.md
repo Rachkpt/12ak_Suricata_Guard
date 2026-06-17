@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="Logo/logo.png" alt="12ak_Suricata Guard logo" width="160">
+</div>
+
 # 🛡️ 12ak_Suricata Guard
 
 **12ak_Suricata Guard** est un système de détection et de blocage automatique d'IPs malveillantes, conçu pour sécuriser un serveur Linux (Ubuntu/Debian) en temps réel.
@@ -46,7 +50,7 @@ L'installation est **100% automatisée** : un seul script s'occupe d'installer S
 
 ```bash
 # 1. Cloner le repo
-git clone https://github.com/Rachkpt/12ak_Suricata_Guard.git
+git clone https://github.com/<TON_PSEUDO>/12ak_Suricata_Guard.git
 cd 12ak_Suricata_Guard
 
 # 2. Lancer l'installation (en root)
