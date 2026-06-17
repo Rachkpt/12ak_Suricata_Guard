@@ -3,7 +3,7 @@
 #   SURICATA GUARD — Installateur automatique tout-en-un
 #   Suricata + IPTABLES + Bot Telegram + Email + Service systemd
 #   ────────────────────────────────────────────────────────────────
-#   Outil développé et signé par : 12ak_H4ck (Aledji Ar-Rachad)
+#   Outil développé et signé par : 12ak_H4ck 
 #   Cette signature est immuable et ne doit pas être retirée.
 # ════════════════════════════════════════════════════════════════════
 
@@ -15,7 +15,7 @@ CYA='\033[0;36m'; MAG='\033[0;35m'; BLD='\033[1m'; NC='\033[0m'
 GREENM='\033[38;5;46m'
 
 SIGNATURE="12ak_H4ck"
-AUTHOR_FULL="Aledji Ar-Rachad"
+AUTHOR_FULL="12ak_H4ck"
 
 # ───────────────────────── CHEMINS / FICHIERS ────────────────────────
 WORKDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
