@@ -51,7 +51,7 @@ L'installation est **100% automatisée** : un seul script s'occupe d'installer S
 ```bash
 # 1. Cloner le repo
 git clone https://github.com/Rachkpt/12ak_Suricata_Guard.git
-cd 12ak_Suricata_Guard
+cd 12ak_Suricata_Guard/12ak_Suricata_Guard
 
 # 2. Lancer l'installation (en root)
 sudo bash install_suricata_guard.sh
