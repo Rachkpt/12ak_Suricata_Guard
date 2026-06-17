@@ -1,0 +1,77 @@
+# ════════════════════════════════════════════════════════════════
+#  local.rules — Suricata Guard
+#  Détection NMAP / Scans / DDoS / Brute-force / Web attacks
+#  Déployé et signé par : 12ak_H4ck (Aledji Ar-Rachad)
+# ════════════════════════════════════════════════════════════════
+
+# ── NMAP : SYN SCAN -sS (speeds T1-T5) ─────────────────────────
+alert tcp any any -> any [21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465,514,587,636,853,993,995,1194,1433,1720,3306,3389,8080,8443,11211,27017,51820] (msg:"POSSBL PORT SCAN (NMAP -sS)"; flow:to_server,stateless; flags:S; window:1024; tcp.mss:1460; threshold:type threshold, track by_src, count 20, seconds 70; classtype:attempted-recon; sid:3400001; priority:2; rev:1;)
+alert tcp any any -> any ![21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465,514,587,636,853,993,995,1194,1433,1720,3306,3389,8080,8443,11211,27017,51820] (msg:"POSSBL PORT SCAN (NMAP -sS)"; flow:to_server,stateless; flags:S; window:1024; tcp.mss:1460; threshold:type threshold, track by_src, count 7, seconds 135; classtype:attempted-recon; sid:3400002; priority:2; rev:2;)
+
+# ── NMAP : SYN-ACK 3-WAY SCAN -sT (speeds T2-T5) ───────────────
+alert tcp any ![22,25,53,80,88,143,443,445,465,587,853,993,1194,8080,51820] -> any ![22,25,53,80,88,143,443,445,465,587,853,993,1194,8080,51820] (msg:"POSSBL PORT SCAN (NMAP -sT)"; flow:to_server; window:32120; flags:S; threshold:type threshold, track by_src, count 20, seconds 70; classtype:attempted-recon; sid:3400003; rev:3;)
+
+# ── NMAP : ACK SCAN -sA (speeds T2-T5) ─────────────────────────
+alert tcp any ![22,25,53,80,88,143,443,445,465,587,853,993,1194,8080,51820] -> any ![22,25,53,80,88,143,443,445,465,587,853,993,1194,8080,51820] (msg:"POSSBL PORT SCAN (NMAP -sA)"; flags:A; flow:stateless; window:1024; threshold:type threshold, track by_dst, count 20, seconds 70; classtype:attempted-recon; sid:3400004; priority:2; rev:5;)
+
+# ── NMAP : CHRISTMAS TREE SCAN -sX (speeds T1-T5) ──────────────
+alert tcp any any -> any any (msg:"POSSBL PORT SCAN (NMAP -sX)"; flags:FPU; flow:to_server,stateless; threshold:type threshold, track by_src, count 3, seconds 120; classtype:attempted-recon; sid:3400005; rev:2;)
+
+# ── NMAP : FRAGMENTED SCAN -f (speeds T1-T5) ───────────────────
+alert ip any any -> any any (msg:"POSSBL SCAN FRAG (NMAP -f)"; fragbits:M+D; threshold:type limit, track by_src, count 3, seconds 1210; classtype:attempted-recon; sid:3400006; priority:2; rev:6;)
+
+# ── NMAP : UDP SCAN -sU (speeds T1-T5) ─────────────────────────
+alert udp any any -> any [53,67,68,69,123,161,162,389,520,1026,1027,1028,1029,1194,1434,1900,11211,12345,27017,51820] (msg:"POSSBL PORT SCAN (NMAP -sU)"; flow:to_server,stateless; classtype:attempted-recon; sid:3400007; priority:2; rev:6; threshold:type threshold, track by_src, count 20, seconds 70; dsize:0;)
+alert udp any any -> any ![53,67,68,69,123,161,162,389,520,1026,1027,1028,1029,1194,1434,1900,11211,12345,27017,51820] (msg:"POSSBL PORT SCAN (NMAP -sU)"; flow:to_server,stateless; classtype:attempted-recon; sid:3400008; priority:2; rev:6; threshold:type threshold, track by_src, count 7, seconds 135; dsize:0;)
+
+# ── METASPLOIT / SHELL : destination port 4444 ─────────────────
+alert tcp any ![21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465,514,587,636,853,993,995,1194,1433,1720,3306,3389,8080,8443,11211,27017,51820] -> any 4444 (msg:"POSSBL SCAN SHELL M-SPLOIT TCP"; classtype:trojan-activity; sid:3400020; priority:1; rev:2;)
+alert udp any ![53,67,68,69,123,161,162,389,520,1026,1027,1028,1029,1194,1434,1900,11211,12345,27017,51820] -> any 4444 (msg:"POSSBL SCAN SHELL M-SPLOIT UDP"; classtype:trojan-activity; sid:3400021; priority:1; rev:2;)
+
+# ════════════════════════════════════════════════════════════════
+#  RÈGLES SUPPLÉMENTAIRES — 12ak_H4ck
+# ════════════════════════════════════════════════════════════════
+
+# ── SSH BRUTE-FORCE ─────────────────────────────────────────────
+alert tcp any any -> any 22 (msg:"SSH BRUTEFORCE - Tentatives multiples"; flow:to_server,established; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3400100; priority:1; rev:1;)
+alert tcp any any -> any 22 (msg:"SSH BRUTEFORCE - SYN flood vers SSH"; flow:to_server,stateless; flags:S; threshold:type threshold, track by_src, count 10, seconds 30; classtype:attempted-dos; sid:3400101; priority:1; rev:1;)
+
+# ── RDP BRUTE-FORCE ──────────────────────────────────────────────
+alert tcp any any -> any 3389 (msg:"RDP BRUTEFORCE - Tentatives multiples"; flow:to_server,established; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3400110; priority:1; rev:1;)
+
+# ── FTP BRUTE-FORCE ───────────────────────────────────────────────
+alert tcp any any -> any 21 (msg:"FTP BRUTEFORCE - Tentatives multiples"; flow:to_server,established; threshold:type threshold, track by_src, count 5, seconds 60; classtype:attempted-admin; sid:3400120; priority:1; rev:1;)
+
+# ── SMB SCAN / BRUTE-FORCE (EternalBlue-like) ────────────────────
+alert tcp any any -> any [139,445] (msg:"SMB SCAN - Connexions multiples"; flow:to_server; threshold:type threshold, track by_src, count 10, seconds 60; classtype:attempted-recon; sid:3400130; priority:1; rev:1;)
+
+# ── DNS AMPLIFICATION ────────────────────────────────────────────
+alert udp any any -> any 53 (msg:"DNS AMPLIFICATION - Volume anormal de requetes"; threshold:type threshold, track by_src, count 50, seconds 10; classtype:attempted-dos; sid:3400140; priority:1; rev:1;)
+
+# ── ICMP FLOOD ────────────────────────────────────────────────────
+alert icmp any any -> any any (msg:"ICMP FLOOD DDOS detecte"; itype:8; threshold:type threshold, track by_src, count 50, seconds 5; classtype:attempted-dos; sid:3400150; priority:1; rev:1;)
+
+# ── SYN FLOOD GÉNÉRALISÉ ─────────────────────────────────────────
+alert tcp any any -> any any (msg:"SYN FLOOD DDOS - Volume eleve"; flags:S; threshold:type threshold, track by_src, count 100, seconds 10; classtype:attempted-dos; sid:3400160; priority:1; rev:1;)
+
+# ── UDP FLOOD GÉNÉRALISÉ ──────────────────────────────────────────
+alert udp any any -> any any (msg:"UDP FLOOD DDOS - Volume eleve"; threshold:type threshold, track by_src, count 200, seconds 10; classtype:attempted-dos; sid:3400161; priority:1; rev:1;)
+
+# ── SLOWLORIS / HTTP SLOW ATTACK ──────────────────────────────────
+alert tcp any any -> any [80,443,8080] (msg:"SLOWLORIS - Connexions HTTP lentes multiples"; flow:to_server; threshold:type threshold, track by_src, count 50, seconds 30; classtype:attempted-dos; sid:3400170; priority:2; rev:1;)
+
+# ── WEB BRUTE-FORCE (login forms) ─────────────────────────────────
+alert tcp any any -> any [80,443,8080] (msg:"WEB BRUTEFORCE - Requetes POST repetees"; flow:to_server,established; content:"POST"; http_method; threshold:type threshold, track by_src, count 15, seconds 30; classtype:web-application-attack; sid:3400180; priority:2; rev:1;)
+
+# ── SQL INJECTION (patterns courants) ─────────────────────────────
+alert tcp any any -> any [80,443,8080] (msg:"SQLI - Tentative injection SQL detectee"; flow:to_server,established; content:"union"; nocase; http_uri; pcre:"/union.+select/i"; classtype:web-application-attack; sid:3400190; priority:1; rev:1;)
+alert tcp any any -> any [80,443,8080] (msg:"SQLI - Tentative injection SQL (OR 1=1)"; flow:to_server,established; content:"or 1=1"; nocase; http_uri; classtype:web-application-attack; sid:3400191; priority:1; rev:1;)
+
+# ── XSS (patterns courants) ────────────────────────────────────────
+alert tcp any any -> any [80,443,8080] (msg:"XSS - Tentative cross-site scripting"; flow:to_server,established; content:"<script"; nocase; http_uri; classtype:web-application-attack; sid:3400200; priority:1; rev:1;)
+
+# ── SCAN SSL/TLS (sslscan, testssl) ──────────────────────────────
+alert tcp any any -> any 443 (msg:"SSL SCAN - Multiples handshakes TLS"; flow:to_server; threshold:type threshold, track by_src, count 30, seconds 30; classtype:attempted-recon; sid:3400210; priority:2; rev:1;)
+
+# ── WEBSHELL / BACKDOOR ACCESS ─────────────────────────────────────
+alert tcp any any -> any [80,443,8080] (msg:"WEBSHELL - Acces fichier suspect (.php cmd/shell)"; flow:to_server,established; pcre:"/\/(shell|cmd|webshell|c99|r57)\.php/i"; http_uri; classtype:web-application-attack; sid:3400220; priority:1; rev:1;)
