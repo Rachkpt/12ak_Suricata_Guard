@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-suricata_guard.py  v4.0
+suricata_guard.py 
 ━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Monitore fast.log en temps réel (polling 50ms)
 ✅ NMAP / Attaques / DDoS → Blocage immédiat + Alerte Telegram + Mail
@@ -864,7 +864,7 @@ def main():
     setup_chain()
 
     log.info("══════════════════════════════════════════")
-    log.info("  suricata_guard.py v4.0  -  DEMARRE     ")
+    log.info("  suricata_guard.py  -  DEMARRE     ")
     log.info(f"  Seuil blocage : {ALERT_THRESHOLD} alertes")
     log.info(f"  Email activé  : {EMAIL_ENABLED} ({EMAIL_PROVIDER})")
     log.info(f"  Email vers    : {EMAIL_TO}")
@@ -891,7 +891,7 @@ def main():
     # Notification Telegram de démarrage
     threading.Thread(
         target=lambda: (time.sleep(3), tg_send(
-            "🛡️ <b>Suricata Guard v4.0 démarré</b>\n"
+            "🛡️ <b>Suricata Guard démarré</b>\n"
             f"📧 Notifications mail : {'✅ Activées' if EMAIL_ENABLED else '❌ Désactivées'}\n"
             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
             f"🔰 by <b>{TOOL_SIGNATURE}</b>"
