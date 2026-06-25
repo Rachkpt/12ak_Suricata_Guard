@@ -43,8 +43,8 @@ L'installation est **100% automatisée** : un seul script s'occupe d'installer S
 
 - Un serveur **Ubuntu / Debian** (testé sur Ubuntu 22.04+)
 - Accès **root** (ou `sudo`)
-- *(Optionnel)* Un bot Telegram créé via [@BotFather](https://t.me/BotFather), et ton `chat_id` via [@userinfobot](https://t.me/userinfobot)
-- *(Optionnel)* Une adresse email pour les notifications (mot de passe d'application si Gmail)
+- *(Optionnel)* Un bot Telegram créé via 👉 [@BotFather](https://t.me/BotFather)👈, et ton `chat_id` via 👉 [@userinfobot](https://t.me/userinfobot)👈
+- *(Optionnel)* Une adresse email pour les notifications (mot de passe d'application si Gmail) via 👉 [@app password](https://myaccount.google.com/u/1/apppasswords)👈
 
 ### Étapes
 
