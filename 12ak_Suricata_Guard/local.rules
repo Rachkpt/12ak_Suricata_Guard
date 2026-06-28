@@ -1,7 +1,8 @@
 # ════════════════════════════════════════════════════════════════
 #  local.rules — Suricata Guard
-#  Détection NMAP / Scans / DDoS / Brute-force / Web attacks
+#  Détection NMAP / Scans / DDoS / Brute-force / Web attacks / ICMP
 #  Déployé et signé par : 12ak_H4ck (Aledji Ar-Rachad)
+#  Compatibilité : Suricata 7.x / 8.x
 # ════════════════════════════════════════════════════════════════
 
 # ── NMAP : SYN SCAN -sS (speeds T1-T5) ─────────────────────────
@@ -61,17 +62,38 @@ alert udp any any -> any any (msg:"UDP FLOOD DDOS - Volume eleve"; threshold:typ
 alert tcp any any -> any [80,443,8080] (msg:"SLOWLORIS - Connexions HTTP lentes multiples"; flow:to_server; threshold:type threshold, track by_src, count 50, seconds 30; classtype:attempted-dos; sid:3400170; priority:2; rev:1;)
 
 # ── WEB BRUTE-FORCE (login forms) ─────────────────────────────────
-alert tcp any any -> any [80,443,8080] (msg:"WEB BRUTEFORCE - Requetes POST repetees"; flow:to_server,established; content:"POST"; http_method; threshold:type threshold, track by_src, count 15, seconds 30; classtype:web-application-attack; sid:3400180; priority:2; rev:1;)
+# http_method est un sticky buffer en Suricata 8 — content doit le précéder
+alert tcp any any -> any [80,443,8080] (msg:"WEB BRUTEFORCE - Requetes POST repetees"; flow:to_server,established; http.method; content:"POST"; threshold:type threshold, track by_src, count 15, seconds 30; classtype:web-application-attack; sid:3400180; priority:2; rev:3;)
 
 # ── SQL INJECTION (patterns courants) ─────────────────────────────
-alert tcp any any -> any [80,443,8080] (msg:"SQLI - Tentative injection SQL detectee"; flow:to_server,established; content:"union"; nocase; http_uri; pcre:"/union.+select/i"; classtype:web-application-attack; sid:3400190; priority:1; rev:1;)
-alert tcp any any -> any [80,443,8080] (msg:"SQLI - Tentative injection SQL (OR 1=1)"; flow:to_server,established; content:"or 1=1"; nocase; http_uri; classtype:web-application-attack; sid:3400191; priority:1; rev:1;)
+# Syntaxe Suricata 8 : http.uri remplace http_uri
+alert tcp any any -> any [80,443,8080] (msg:"SQLI - Tentative injection SQL detectee"; flow:to_server,established; http.uri; content:"union"; nocase; pcre:"/union.+select/i"; classtype:web-application-attack; sid:3400190; priority:1; rev:2;)
+alert tcp any any -> any [80,443,8080] (msg:"SQLI - Tentative injection SQL (OR 1=1)"; flow:to_server,established; http.uri; content:"or 1=1"; nocase; classtype:web-application-attack; sid:3400191; priority:1; rev:2;)
 
 # ── XSS (patterns courants) ────────────────────────────────────────
-alert tcp any any -> any [80,443,8080] (msg:"XSS - Tentative cross-site scripting"; flow:to_server,established; content:"<script"; nocase; http_uri; classtype:web-application-attack; sid:3400200; priority:1; rev:1;)
+alert tcp any any -> any [80,443,8080] (msg:"XSS - Tentative cross-site scripting"; flow:to_server,established; http.uri; content:"<script"; nocase; classtype:web-application-attack; sid:3400200; priority:1; rev:2;)
 
 # ── SCAN SSL/TLS (sslscan, testssl) ──────────────────────────────
 alert tcp any any -> any 443 (msg:"SSL SCAN - Multiples handshakes TLS"; flow:to_server; threshold:type threshold, track by_src, count 30, seconds 30; classtype:attempted-recon; sid:3400210; priority:2; rev:1;)
 
 # ── WEBSHELL / BACKDOOR ACCESS ─────────────────────────────────────
-alert tcp any any -> any [80,443,8080] (msg:"WEBSHELL - Acces fichier suspect (.php cmd/shell)"; flow:to_server,established; pcre:"/\/(shell|cmd|webshell|c99|r57)\.php/i"; http_uri; classtype:web-application-attack; sid:3400220; priority:1; rev:1;)
+alert tcp any any -> any [80,443,8080] (msg:"WEBSHELL - Acces fichier suspect (.php cmd/shell)"; flow:to_server,established; http.uri; content:".php"; nocase; pcre:"/\/(shell|cmd|webshell|c99|r57)\.php/i"; classtype:web-application-attack; sid:3400220; priority:1; rev:2;)
+
+# ════════════════════════════════════════════════════════════════
+#  RÈGLES ICMP / PING — 12ak_H4ck
+# ════════════════════════════════════════════════════════════════
+
+# ── PING ICMP ECHO REQUEST (détection simple) ───────────────────
+alert icmp any any -> any any (msg:"PING ICMP - Echo request detecte"; itype:8; icode:0; classtype:misc-activity; sid:3400300; priority:3; rev:1;)
+
+# ── PING ICMP ECHO REPLY ────────────────────────────────────────
+alert icmp any any -> any any (msg:"PING ICMP - Echo reply"; itype:0; icode:0; classtype:misc-activity; sid:3400301; priority:3; rev:1;)
+
+# ── ICMP OVERSIZED (ping of death) ──────────────────────────────
+alert icmp any any -> any any (msg:"ICMP OVERSIZED - Ping of Death potentiel"; dsize:>1000; classtype:attempted-dos; sid:3400303; priority:1; rev:1;)
+
+# ── NMAP PING SWEEP (-sn) ────────────────────────────────────────
+alert icmp any any -> any any (msg:"NMAP PING SWEEP - Scan reseau ICMP"; itype:8; threshold:type threshold, track by_src, count 5, seconds 2; classtype:attempted-recon; sid:3400304; priority:2; rev:1;)
+
+# ── TRACEROUTE ICMP (TTL expired) ───────────────────────────────
+alert icmp any any -> any any (msg:"TRACEROUTE ICMP - Sondage reseau detecte"; itype:11; icode:0; threshold:type threshold, track by_src, count 3, seconds 10; classtype:attempted-recon; sid:3400305; priority:2; rev:1;)
