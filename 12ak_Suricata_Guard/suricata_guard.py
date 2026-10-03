@@ -204,6 +204,15 @@ def is_ipv4(ip: str) -> bool:
         return False
 
 
+def local_ipv4_addresses() -> set:
+    """Adresses IPv4 du serveur : on ne bloque jamais le serveur lui-même
+    (une règle peut se déclencher sur son propre trafic sortant)."""
+    res = _run(["ip", "-o", "-4", "addr", "show"])
+    if res is None or res.returncode != 0:
+        return set()
+    return set(re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", res.stdout))
+
+
 def _esc(value) -> str:
     """Échappe pour le mode HTML de Telegram (évite les messages rejetés)."""
     return html.escape(str(value), quote=False)
@@ -938,6 +947,10 @@ def main():
     log.info(f"  Email         : {'activé' if EMAIL_ENABLED else 'désactivé'} ({EMAIL_PROVIDER})")
     log.info(f"  Signé         : {TOOL_SIGNATURE} ({TOOL_AUTHOR_FULL})")
     log.info("══════════════════════════════════════════")
+
+    own = local_ipv4_addresses()
+    WHITELIST.update(own)
+    log.info(f"  IPs du serveur protégées : {', '.join(sorted(own)) or 'aucune détectée'}")
 
     setup_chain()
     if MAIL_ON_START:

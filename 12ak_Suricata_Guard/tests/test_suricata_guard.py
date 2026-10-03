@@ -150,5 +150,51 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("203.0.113.9", sg.blocked_ips)
 
 
+class RulesFileTests(unittest.TestCase):
+    """Contrôles structurels de local.rules (sans Suricata installé)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rules = [
+            line.strip() for line in (ROOT / "local.rules").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+    def test_every_rule_is_well_formed(self):
+        for rule in self.rules:
+            with self.subTest(rule=rule[:60]):
+                self.assertTrue(rule.startswith(("alert ", "drop ", "pass ", "reject ")), rule[:60])
+                self.assertIn('(msg:"', rule)
+                self.assertTrue(rule.endswith(";)"), "la règle doit finir par ;)")
+                self.assertEqual(rule.count("("), rule.count(")"), "parenthèses déséquilibrées")
+
+    def test_sids_are_unique(self):
+        sids = [r.split("sid:")[1].split(";")[0] for r in self.rules if "sid:" in r]
+        self.assertEqual(len(sids), len(set(sids)), "sid en double")
+
+    def test_every_rule_has_classtype(self):
+        for rule in self.rules:
+            with self.subTest(rule=rule[:60]):
+                self.assertIn("classtype:", rule)
+
+
+class ModifiedRulesClassificationTests(unittest.TestCase):
+    """Les messages des règles corrigées tombent dans la bonne catégorie."""
+
+    def test_ping_of_death_now_blocks(self):
+        self.assertEqual(sg.classify("ICMP DOS - Ping of Death potentiel"), "instant")
+
+    def test_log4j_blocks_immediately(self):
+        self.assertEqual(sg.classify("EXPLOIT Log4j JNDI injection (URI)"), "instant")
+
+    def test_noisy_patterns_go_through_threshold(self):
+        for msg in ("HTTP CONNEXIONS LENTES MULTIPLES - a surveiller",
+                    "WEB POST REPETES - formulaires (a surveiller)",
+                    "DNS REQUETES MULTIPLES - volume anormal",
+                    "SMB CONNEXIONS MULTIPLES - sondage 445"):
+            with self.subTest(msg=msg):
+                self.assertEqual(sg.classify(msg), "normal")
+
+
 if __name__ == "__main__":
     unittest.main()
