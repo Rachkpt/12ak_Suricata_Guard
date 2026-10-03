@@ -3,7 +3,7 @@
 #   VIGIE — Désinstallation complète
 #   Arrête le bot, retire TOUS les blocages iptables, supprime les fichiers.
 #   ────────────────────────────────────────────────────────────────
-#   Outil développé et signé par : 12ak_H4ck
+#   Outil développé et signé par : __KAT4NA_
 # ════════════════════════════════════════════════════════════════════
 #
 #   Usage :

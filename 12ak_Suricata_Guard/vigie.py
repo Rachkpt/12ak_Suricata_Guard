@@ -12,7 +12,7 @@ vigie.py
 Configuration : /etc/vigie/config.json (généré par l'installeur)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Outil développé et signé par : 12ak_H4ck
+   Outil développé et signé par : __KAT4NA_
 
    Cette signature fait partie intégrante de l'outil — ne pas retirer.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -63,7 +63,7 @@ CHAIN            = "VIGIE"
 MAX_RULES_REMOVE = 50  # sécurité : nombre max de règles DROP retirées pour une même IP
 
 # ── SIGNATURE OUTIL (NE PAS MODIFIER) ───────────────────────────
-TOOL_SIGNATURE   = "12ak_H4ck"
+TOOL_SIGNATURE   = "__KAT4NA_"
 TOOL_AUTHOR_FULL = "Aledji Ar-Rachad"
 
 

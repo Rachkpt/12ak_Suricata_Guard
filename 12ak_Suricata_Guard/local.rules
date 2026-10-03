@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════════════
 #  local.rules — Vigie
 #  Détection NMAP / Scans / DDoS / Brute-force / Web attacks / ICMP
-#  Déployé et signé par : 12ak_H4ck (Aledji Ar-Rachad)
+#  Déployé et signé par : __KAT4NA_ (Aledji Ar-Rachad)
 #  Compatibilité : Suricata 7.x / 8.x
 # ════════════════════════════════════════════════════════════════
 
@@ -30,7 +30,7 @@ alert tcp any ![21,22,23,25,53,80,88,110,135,137,138,139,143,161,389,443,445,465
 alert udp any ![53,67,68,69,123,161,162,389,520,1026,1027,1028,1029,1194,1434,1900,11211,12345,27017,51820] -> any 4444 (msg:"POSSBL SCAN SHELL M-SPLOIT UDP"; classtype:trojan-activity; sid:3400021; priority:1; rev:2;)
 
 # ════════════════════════════════════════════════════════════════
-#  RÈGLES SUPPLÉMENTAIRES — 12ak_H4ck
+#  RÈGLES SUPPLÉMENTAIRES — __KAT4NA_
 # ════════════════════════════════════════════════════════════════
 
 # ── SSH BRUTE-FORCE ─────────────────────────────────────────────
@@ -84,7 +84,7 @@ alert tls any any -> any 443 (msg:"TLS HANDSHAKES MULTIPLES - sondage SSL"; flow
 alert tcp any any -> any [80,443,8080] (msg:"WEBSHELL - Acces fichier suspect (.php cmd/shell)"; flow:to_server,established; http.uri; content:".php"; nocase; pcre:"/\/(shell|cmd|webshell|c99|r57)\.php/i"; classtype:web-application-attack; sid:3400220; priority:1; rev:2;)
 
 # ════════════════════════════════════════════════════════════════
-#  RÈGLES ICMP / PING — 12ak_H4ck
+#  RÈGLES ICMP / PING — __KAT4NA_
 # ════════════════════════════════════════════════════════════════
 
 # ── PING ICMP ECHO REQUEST (détection simple) ───────────────────

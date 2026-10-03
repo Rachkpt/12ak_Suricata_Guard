@@ -3,7 +3,7 @@
 #   VIGIE — Installateur automatique tout-en-un
 #   Suricata + IPTABLES + Bot Telegram + Email + Service systemd
 #   ────────────────────────────────────────────────────────────────
-#   Outil développé et signé par : 12ak_H4ck 
+#   Outil développé et signé par : __KAT4NA_ 
 #   Cette signature est immuable et ne doit pas être retirée.
 # ════════════════════════════════════════════════════════════════════
 
@@ -14,8 +14,8 @@ RED='\033[0;31m'; GRN='\033[0;32m'; YEL='\033[1;33m'; BLU='\033[0;34m'
 CYA='\033[0;36m'; MAG='\033[0;35m'; BLD='\033[1m'; NC='\033[0m'
 GREENM='\033[38;5;46m'
 
-SIGNATURE="12ak_H4ck"
-AUTHOR_FULL="12ak_H4ck"
+SIGNATURE="__KAT4NA_"
+AUTHOR_FULL="__KAT4NA_"
 
 # ───────────────────────── CHEMINS / FICHIERS ────────────────────────
 WORKDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,7 +65,7 @@ matrix_rain() {
     local cols
     cols=$(tput cols 2>/dev/null || echo 80)
     local end_time=$((SECONDS + duration))
-    local chars="01アイウエオカキクケコサシスセソ12ak_H4ck"
+    local chars="01アイウエオカキクケコサシスセソ__KAT4NA_"
     while [ $SECONDS -lt $end_time ]; do
         local line=""
         for ((i=0; i<cols/2; i++)); do

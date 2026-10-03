@@ -171,6 +171,6 @@ Les tests n'appellent jamais iptables réel et ne nécessitent pas Telegram.
 
 <div align="center">
 
-Développé et signé par **12ak_H4ck**
+Développé et signé par **__KAT4NA_**
 
 </div>
