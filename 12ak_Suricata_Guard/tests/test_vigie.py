@@ -1,5 +1,5 @@
 """
-Tests de suricata_guard.py (bibliothèque standard uniquement).
+Tests de vigie.py (bibliothèque standard uniquement).
 
 Lancement depuis le dossier du script :
     python3 -m unittest discover -s tests -v
@@ -24,11 +24,11 @@ CONFIG.write_text(json.dumps({
     "email_enabled": False,
     "whitelist": ["192.168.1.50"],
 }))
-os.environ["SURICATA_GUARD_CONFIG"] = str(CONFIG)
-os.environ["SURICATA_GUARD_LOG"] = str(Path(TMP) / "guard.log")
-os.environ["SURICATA_BLOCKED_LOG"] = str(Path(TMP) / "blocked.log")
+os.environ["VIGIE_CONFIG"] = str(CONFIG)
+os.environ["VIGIE_LOG"] = str(Path(TMP) / "vigie.log")
+os.environ["VIGIE_BLOCKED_LOG"] = str(Path(TMP) / "blocked.log")
 
-spec = importlib.util.spec_from_file_location("suricata_guard", ROOT / "suricata_guard.py")
+spec = importlib.util.spec_from_file_location("vigie", ROOT / "vigie.py")
 sg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sg)
 
@@ -86,15 +86,15 @@ class ClassificationTests(unittest.TestCase):
 class ParseBlockedTests(unittest.TestCase):
     def test_parses_iptables_s_output(self):
         out = (
-            "-N SURICATA_GUARD\n"
-            "-A SURICATA_GUARD -s 1.2.3.4/32 -j DROP\n"
-            "-A SURICATA_GUARD -s 5.6.7.8/32 -j DROP\n"
-            "-A SURICATA_GUARD -s 1.2.3.4/32 -j DROP\n"
+            "-N VIGIE\n"
+            "-A VIGIE -s 1.2.3.4/32 -j DROP\n"
+            "-A VIGIE -s 5.6.7.8/32 -j DROP\n"
+            "-A VIGIE -s 1.2.3.4/32 -j DROP\n"
         )
         self.assertEqual(sg.parse_blocked_ips(out), ["1.2.3.4", "5.6.7.8"])
 
     def test_empty_chain(self):
-        self.assertEqual(sg.parse_blocked_ips("-N SURICATA_GUARD\n"), [])
+        self.assertEqual(sg.parse_blocked_ips("-N VIGIE\n"), [])
 
 
 class TextTests(unittest.TestCase):

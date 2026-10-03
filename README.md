@@ -1,10 +1,10 @@
 <div align="center">
-  <img src="Logo/logo.png" alt="12ak_Suricata Guard logo" width="160">
+  <img src="Logo/logo.png" alt="12ak_Vigie logo" width="160">
 </div>
 
-# 🛡️ 12ak_Suricata Guard
+# 🛡️ 12ak_Vigie
 
-**12ak_Suricata Guard** détecte et bloque automatiquement les IPs malveillantes sur un serveur Linux (Ubuntu/Debian), en temps réel.
+**12ak_Vigie** détecte et bloque automatiquement les IPs malveillantes sur un serveur Linux (Ubuntu/Debian), en temps réel.
 
 Il combine **Suricata** (détection réseau), **iptables** (blocage), un **bot Telegram** (pilotage depuis ton téléphone) et des **notifications email**.
 
@@ -53,7 +53,7 @@ git clone https://github.com/Rachkpt/12ak_Suricata_Guard.git
 cd 12ak_Suricata_Guard/12ak_Suricata_Guard
 
 # 2. Lancer l'installation (en root)
-sudo bash install_suricata_guard.sh
+sudo bash install_vigie.sh
 ```
 
 L'installeur pose quelques questions (interface réseau, seuil, Telegram, email, whitelist), puis configure tout seul. Si tu es connecté en SSH, il te propose de **whitelister ton IP** pour que tu ne te bloques pas toi-même.
@@ -64,14 +64,14 @@ Ensuite, envoie `/start` à ton bot Telegram.
 
 | Chemin | Contenu |
 |---|---|
-| `/opt/suricata-guard/suricata_guard.py` | Le moteur (droits 700, root) |
-| `/etc/suricata-guard/config.json` | Ta configuration et tes secrets (droits 600, root) |
-| `/etc/systemd/system/suricata-guard.service` | Le service |
-| `/var/log/suricata_guard.log` | Journal du bot (roté chaque semaine) |
-| `/var/log/suricata_blocked.log` | Historique des blocages |
+| `/opt/vigie/vigie.py` | Le moteur (droits 700, root) |
+| `/etc/vigie/config.json` | Ta configuration et tes secrets (droits 600, root) |
+| `/etc/systemd/system/vigie.service` | Le service |
+| `/var/log/vigie.log` | Journal du bot (roté chaque semaine) |
+| `/var/log/vigie_blocked.log` | Historique des blocages |
 | `/etc/suricata/rules/local.rules` | Les règles de détection |
 
-Pour modifier la configuration : édite `/etc/suricata-guard/config.json`, puis `sudo systemctl restart suricata-guard`. Les champs les plus utiles sont `alert_threshold`, `alert_window_seconds` et `whitelist`.
+Pour modifier la configuration : édite `/etc/vigie/config.json`, puis `sudo systemctl restart vigie`. Les champs les plus utiles sont `alert_threshold`, `alert_window_seconds` et `whitelist`.
 
 ---
 
@@ -79,16 +79,16 @@ Pour modifier la configuration : édite `/etc/suricata-guard/config.json`, puis 
 
 ```bash
 # Voir les logs du bot en direct
-journalctl -u suricata-guard -f
+journalctl -u vigie -f
 
 # Voir les IPs actuellement bloquées
-sudo iptables -S SURICATA_GUARD
+sudo iptables -S VIGIE
 
 # Débloquer une IP à la main
-sudo iptables -D SURICATA_GUARD -s 203.0.113.7 -j DROP
+sudo iptables -D VIGIE -s 203.0.113.7 -j DROP
 
 # Redémarrer le bot
-sudo systemctl restart suricata-guard
+sudo systemctl restart vigie
 
 # Vérifier Suricata
 sudo systemctl status suricata
@@ -102,13 +102,13 @@ Trois niveaux, du plus léger au plus complet :
 
 ```bash
 # 1. Arrêter le bot seulement (les IPs restent bloquées)
-sudo systemctl stop suricata-guard
+sudo systemctl stop vigie
 
 # 2. Arrêter le bot ET l'empêcher de redémarrer au reboot
-sudo systemctl disable --now suricata-guard
+sudo systemctl disable --now vigie
 
 # 3. Débloquer toutes les IPs (sans toucher au reste)
-sudo iptables -F SURICATA_GUARD
+sudo iptables -F VIGIE
 ```
 
 Pour arrêter Suricata aussi : `sudo systemctl disable --now suricata`.
@@ -120,19 +120,19 @@ Pour arrêter Suricata aussi : `sudo systemctl disable --now suricata`.
 Un script de désinstallation est copié sur le serveur à l'installation :
 
 ```bash
-sudo bash /opt/suricata-guard/uninstall_suricata_guard.sh
+sudo bash /opt/vigie/uninstall_vigie.sh
 ```
 
 Il demande confirmation (tape `OUI`), puis :
 
 1. arrête et supprime le service ;
-2. retire **toutes** les IPs bloquées et la chaîne `SURICATA_GUARD` ;
-3. supprime `/opt/suricata-guard` et `/etc/suricata-guard` (les secrets sont effacés) ;
+2. retire **toutes** les IPs bloquées et la chaîne `VIGIE` ;
+3. supprime `/opt/vigie` et `/etc/vigie` (les secrets sont effacés) ;
 4. retire `local.rules` de Suricata.
 
 Il te demande ensuite si tu veux aussi supprimer les logs et désinstaller Suricata (réponse par défaut : non).
 
-Pour une suppression sans question (garde Suricata et les logs) : `sudo bash /opt/suricata-guard/uninstall_suricata_guard.sh --yes`
+Pour une suppression sans question (garde Suricata et les logs) : `sudo bash /opt/vigie/uninstall_vigie.sh --yes`
 
 ---
 
@@ -140,11 +140,11 @@ Pour une suppression sans question (garde Suricata et les logs) : `sudo bash /op
 
 | Problème | Solution |
 |---|---|
-| Le bot ne répond pas sur Telegram | Vérifie que tu écris depuis le **même compte** que celui du chat_id. `journalctl -u suricata-guard -n 50` affiche les erreurs. |
-| Un bouton ne réagit pas | Vérifie que le service tourne (`systemctl status suricata-guard`), puis retape `/menu`. |
+| Le bot ne répond pas sur Telegram | Vérifie que tu écris depuis le **même compte** que celui du chat_id. `journalctl -u vigie -n 50` affiche les erreurs. |
+| Un bouton ne réagit pas | Vérifie que le service tourne (`systemctl status vigie`), puis retape `/menu`. |
 | Aucune alerte n'apparaît | Vérifie que `/var/log/suricata/fast.log` grossit (`sudo tail -f /var/log/suricata/fast.log`) et que `suricata` est actif. |
-| Une IP légitime est bloquée | `sudo iptables -D SURICATA_GUARD -s IP -j DROP`, puis ajoute-la à `whitelist` dans `config.json`. |
-| Tu t'es bloqué toi-même en SSH | Depuis la console de ton hébergeur : `sudo iptables -F SURICATA_GUARD`. |
+| Une IP légitime est bloquée | `sudo iptables -D VIGIE -s IP -j DROP`, puis ajoute-la à `whitelist` dans `config.json`. |
+| Tu t'es bloqué toi-même en SSH | Depuis la console de ton hébergeur : `sudo iptables -F VIGIE`. |
 
 ---
 
@@ -161,9 +161,9 @@ Les tests n'appellent jamais iptables réel et ne nécessitent pas Telegram.
 
 ## 📁 Contenu du repo
 
-- `install_suricata_guard.sh` — installeur complet
-- `uninstall_suricata_guard.sh` — arrêt et suppression complets
-- `suricata_guard.py` — le moteur de blocage et le bot Telegram
+- `install_vigie.sh` — installeur complet
+- `uninstall_vigie.sh` — arrêt et suppression complets
+- `vigie.py` — le moteur de blocage et le bot Telegram
 - `local.rules` — les règles de détection Suricata
 - `tests/` — tests unitaires
 

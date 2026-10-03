@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════
-#  local.rules — Suricata Guard
+#  local.rules — Vigie
 #  Détection NMAP / Scans / DDoS / Brute-force / Web attacks / ICMP
 #  Déployé et signé par : 12ak_H4ck (Aledji Ar-Rachad)
 #  Compatibilité : Suricata 7.x / 8.x
@@ -48,7 +48,7 @@ alert tcp any any -> any [139,445] (msg:"SMB CONNEXIONS MULTIPLES - sondage 445"
 
 # ── DNS : volume anormal de requetes ───────────────────────────
 # Une vraie amplification vient de résolveurs tiers (8.8.8.8…) : les bloquer couperait le DNS.
-# Seuil uniquement. Le serveur ne bloque jamais ses propres IPs (voir suricata_guard.py).
+# Seuil uniquement. Le serveur ne bloque jamais ses propres IPs (voir vigie.py).
 alert udp any any -> any 53 (msg:"DNS REQUETES MULTIPLES - volume anormal"; threshold:type threshold, track by_src, count 100, seconds 10; classtype:attempted-dos; sid:3400140; priority:2; rev:2;)
 
 # ── ICMP FLOOD ────────────────────────────────────────────────────

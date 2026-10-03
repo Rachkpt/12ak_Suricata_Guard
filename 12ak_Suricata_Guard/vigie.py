@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-suricata_guard.py
+vigie.py
 ━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Surveille fast.log de Suricata en temps réel (polling 50 ms)
 ✅ NMAP / attaques / DDoS → blocage immédiat iptables + alerte Telegram + mail
@@ -9,7 +9,7 @@ suricata_guard.py
 ✅ Bot Telegram réservé à UN chat (chat_id configuré)
 ✅ Notifications email (Gmail, Outlook ou SMTP custom)
 
-Configuration : /etc/suricata-guard/config.json (généré par l'installeur)
+Configuration : /etc/vigie/config.json (généré par l'installeur)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Outil développé et signé par : 12ak_H4ck
@@ -55,11 +55,11 @@ except ImportError:  # le blocage et les mails fonctionnent sans Telegram
 # ╚══════════════════════════════════════════════════════════════╝
 
 VERSION          = "4.1"
-CONFIG_FILE      = os.environ.get("SURICATA_GUARD_CONFIG", "/etc/suricata-guard/config.json")
-LOG_FILE         = os.environ.get("SURICATA_GUARD_LOG", "/var/log/suricata_guard.log")
-BLOCKED_LOG      = os.environ.get("SURICATA_BLOCKED_LOG", "/var/log/suricata_blocked.log")
+CONFIG_FILE      = os.environ.get("VIGIE_CONFIG", "/etc/vigie/config.json")
+LOG_FILE         = os.environ.get("VIGIE_LOG", "/var/log/vigie.log")
+BLOCKED_LOG      = os.environ.get("VIGIE_BLOCKED_LOG", "/var/log/vigie_blocked.log")
 IPTABLES         = shutil.which("iptables") or "/sbin/iptables"
-CHAIN            = "SURICATA_GUARD"
+CHAIN            = "VIGIE"
 MAX_RULES_REMOVE = 50  # sécurité : nombre max de règles DROP retirées pour une même IP
 
 # ── SIGNATURE OUTIL (NE PAS MODIFIER) ───────────────────────────
@@ -157,7 +157,7 @@ UNBLOCK_PREFIX  = "🔓 Débloquer "
 # ║                      ÉTAT GLOBAL                            ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-log = logging.getLogger("suricata_guard")
+log = logging.getLogger("vigie")
 
 STATE_LOCK    = threading.RLock()
 blocked_ips   = set()
@@ -286,14 +286,14 @@ def _mail_html(color: str, title: str, rows: list, footer_html: str = "") -> str
 <h2 style="color:{color};">{_esc(title)}</h2>
 <table style="width:100%;border-collapse:collapse;">{rows_html}</table>
 <p style="color:#888;font-size:12px;">{footer_html}</p>
-<p style="color:#aaa;font-size:11px;">Suricata Guard v{VERSION} — by {TOOL_SIGNATURE}</p>
+<p style="color:#aaa;font-size:11px;">Vigie v{VERSION} — by {TOOL_SIGNATURE}</p>
 </div></body></html>"""
 
 
 def make_email_block(ip: str, reason: str, ts: str) -> tuple:
     subject = f"🚨 [Suricata] IP BLOQUÉE : {ip}"
     body = _mail_html(
-        "#e74c3c", "🚨 Alerte Suricata Guard",
+        "#e74c3c", "🚨 Alerte Vigie",
         [("Statut", "IP BLOQUÉE"), ("IP", ip), ("Raison", reason),
          ("Date/Heure", ts), ("Action", "DROP via iptables")],
         footer_html=(
@@ -317,7 +317,7 @@ def make_email_unblock(ip: str) -> tuple:
 def make_email_start() -> tuple:
     subject = "🛡️ [Suricata] Service démarré"
     body = _mail_html(
-        "#3498db", f"🛡️ Suricata Guard v{VERSION} démarré",
+        "#3498db", f"🛡️ Vigie v{VERSION} démarré",
         [("Date", datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
          ("Seuil blocage", f"{ALERT_THRESHOLD} alertes / {ALERT_WINDOW} s"),
          ("Log surveillé", FAST_LOG),
@@ -391,7 +391,7 @@ def run_cmd(cmd: list) -> bool:
 
 
 def parse_blocked_ips(iptables_output: str) -> list:
-    """Extrait les IPs de la sortie `iptables -S SURICATA_GUARD` (sans doublon)."""
+    """Extrait les IPs de la sortie `iptables -S VIGIE` (sans doublon)."""
     seen, ips = set(), []
     for line in iptables_output.splitlines():
         m = IPV4_RULE_RE.search(line)
@@ -620,7 +620,7 @@ def text_blocked() -> str:
 
 def text_about() -> str:
     return (
-        f"🛡️  <b>Suricata Guard v{VERSION}</b>\n"
+        f"🛡️  <b>Vigie v{VERSION}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"🔰 Développé et signé par : <b>{TOOL_SIGNATURE}</b>\n"
         f"👤 {TOOL_AUTHOR_FULL}\n"
@@ -670,7 +670,7 @@ async def _reply(update, text: str, markup=None):
 
 async def cmd_start(update, ctx):
     msg = await update.message.reply_text(
-        f"🛡️  <b>Suricata Guard v{VERSION}</b>\n"
+        f"🛡️  <b>Vigie v{VERSION}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Utilise les boutons ci-dessous 👇 ou les commandes :\n"
         "/ping    — 🏓 Alertes Ping / ICMP\n"
@@ -692,7 +692,7 @@ async def cmd_start(update, ctx):
 
 
 async def cmd_menu(update, ctx):
-    await _reply(update, "🛡️  <b>Suricata Guard</b> — Menu")
+    await _reply(update, "🛡️  <b>Vigie</b> — Menu")
 
 
 async def cmd_ping(update, ctx):
@@ -907,7 +907,7 @@ async def post_init(app):
     try:
         await app.bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
-            text=(f"🛡️ <b>Suricata Guard démarré</b>\n"
+            text=(f"🛡️ <b>Vigie démarré</b>\n"
                   f"📧 Mails : {'✅ activés' if EMAIL_ENABLED else '❌ désactivés'}\n"
                   f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
                   f"🔰 by <b>{TOOL_SIGNATURE}</b>"),
@@ -941,7 +941,7 @@ def main():
 
     setup_logging()
     log.info("══════════════════════════════════════════")
-    log.info(f"  suricata_guard.py v{VERSION} - DÉMARRE")
+    log.info(f"  vigie.py v{VERSION} - DÉMARRE")
     log.info(f"  Seuil blocage : {ALERT_THRESHOLD} alertes / {ALERT_WINDOW} s")
     log.info(f"  Telegram      : {'activé' if TELEGRAM_ENABLED else 'désactivé'}")
     log.info(f"  Email         : {'activé' if EMAIL_ENABLED else 'désactivé'} ({EMAIL_PROVIDER})")

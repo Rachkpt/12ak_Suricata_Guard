@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════
-#   SURICATA GUARD — Désinstallation complète
+#   VIGIE — Désinstallation complète
 #   Arrête le bot, retire TOUS les blocages iptables, supprime les fichiers.
 #   ────────────────────────────────────────────────────────────────
 #   Outil développé et signé par : 12ak_H4ck
 # ════════════════════════════════════════════════════════════════════
 #
 #   Usage :
-#     sudo bash uninstall_suricata_guard.sh          # interactif (demande confirmation)
-#     sudo bash uninstall_suricata_guard.sh --yes    # sans question : garde Suricata et les logs
+#     sudo bash uninstall_vigie.sh          # interactif (demande confirmation)
+#     sudo bash uninstall_vigie.sh --yes    # sans question : garde Suricata et les logs
 #
 #   Ce qui est fait :
-#     1. arrêt et désactivation du service suricata-guard
-#     2. suppression de TOUTES les règles de blocage (chaîne SURICATA_GUARD)
+#     1. arrêt et désactivation du service vigie
+#     2. suppression de TOUTES les règles de blocage (chaîne VIGIE)
 #     3. suppression du script, de la configuration (contient les secrets) et du service
 #     4. retrait de local.rules de Suricata
 #   Optionnel (questions) : supprimer les logs, désinstaller Suricata lui-même.
@@ -21,15 +21,15 @@ set -uo pipefail
 
 RED='\033[0;31m'; GRN='\033[0;32m'; YEL='\033[1;33m'; CYA='\033[0;36m'; BLD='\033[1m'; NC='\033[0m'
 
-INSTALL_DIR="/opt/suricata-guard"
-CONFIG_DIR="/etc/suricata-guard"
-SYSTEMD_GUARD="/etc/systemd/system/suricata-guard.service"
-LOGROTATE_FILE="/etc/logrotate.d/suricata-guard"
+INSTALL_DIR="/opt/vigie"
+CONFIG_DIR="/etc/vigie"
+SYSTEMD_VIGIE="/etc/systemd/system/vigie.service"
+LOGROTATE_FILE="/etc/logrotate.d/vigie"
 SURICATA_RULES_DIR="/etc/suricata/rules"
 SURICATA_YAML="/etc/suricata/suricata.yaml"
-CHAIN="SURICATA_GUARD"
-LOG_FILES=(/var/log/suricata_guard.log /var/log/suricata_guard_service.log
-           /var/log/suricata_blocked.log /var/log/suricata_guard_install.log)
+CHAIN="VIGIE"
+LOG_FILES=(/var/log/vigie.log /var/log/vigie_service.log
+           /var/log/vigie_blocked.log /var/log/vigie_install.log)
 
 ASSUME_YES=0
 [ "${1:-}" = "--yes" ] && ASSUME_YES=1
@@ -53,7 +53,7 @@ ask_yn() {
 }
 
 echo ""
-echo -e "${BLD}Suricata Guard — désinstallation${NC}"
+echo -e "${BLD}Vigie — désinstallation${NC}"
 echo "  Cela va arrêter le bot et retirer TOUTES les IPs bloquées."
 echo ""
 
@@ -64,12 +64,12 @@ fi
 
 # ── 1. Arrêt du service ─────────────────────────────────────────────
 echo -e "\n${BLD}▶ Arrêt du bot${NC}"
-if systemctl list-unit-files suricata-guard.service >/dev/null 2>&1; then
-    systemctl stop suricata-guard 2>/dev/null && ok "Service suricata-guard arrêté"
-    systemctl disable suricata-guard >/dev/null 2>&1 && ok "Démarrage automatique désactivé"
+if systemctl list-unit-files vigie.service >/dev/null 2>&1; then
+    systemctl stop vigie 2>/dev/null && ok "Service vigie arrêté"
+    systemctl disable vigie >/dev/null 2>&1 && ok "Démarrage automatique désactivé"
 fi
-if [ -f "$SYSTEMD_GUARD" ]; then
-    rm -f "$SYSTEMD_GUARD"
+if [ -f "$SYSTEMD_VIGIE" ]; then
+    rm -f "$SYSTEMD_VIGIE"
     systemctl daemon-reload
     ok "Fichier service supprimé"
 fi
@@ -133,8 +133,8 @@ fi
 # ── Vérification finale ─────────────────────────────────────────────
 echo ""
 echo -e "${BLD}Vérification :${NC}"
-if systemctl is-active --quiet suricata-guard 2>/dev/null; then
-    warn "suricata-guard tourne encore !"
+if systemctl is-active --quiet vigie 2>/dev/null; then
+    warn "vigie tourne encore !"
 else
     ok "Bot arrêté"
 fi
@@ -151,6 +151,6 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 echo ""
-echo -e "${GRN}${BLD}Suricata Guard est supprimé.${NC}"
-echo "  Le script d'installation (install_suricata_guard.sh) reste dans ton dossier de téléchargement."
+echo -e "${GRN}${BLD}Vigie est supprimé.${NC}"
+echo "  Le script d'installation (install_vigie.sh) reste dans ton dossier de téléchargement."
 echo ""

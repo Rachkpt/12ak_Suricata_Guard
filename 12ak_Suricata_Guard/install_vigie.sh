@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════════
-#   SURICATA GUARD — Installateur automatique tout-en-un
+#   VIGIE — Installateur automatique tout-en-un
 #   Suricata + IPTABLES + Bot Telegram + Email + Service systemd
 #   ────────────────────────────────────────────────────────────────
 #   Outil développé et signé par : 12ak_H4ck 
@@ -19,19 +19,19 @@ AUTHOR_FULL="12ak_H4ck"
 
 # ───────────────────────── CHEMINS / FICHIERS ────────────────────────
 WORKDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY_SCRIPT_SRC="${WORKDIR}/suricata_guard.py"
+PY_SCRIPT_SRC="${WORKDIR}/vigie.py"
 RULES_SRC="${WORKDIR}/local.rules"
 
-PY_SCRIPT_DST="/opt/suricata-guard/suricata_guard.py"
-PY_VENV="/opt/suricata-guard/venv"
-CONFIG_DIR="/etc/suricata-guard"
+PY_SCRIPT_DST="/opt/vigie/vigie.py"
+PY_VENV="/opt/vigie/venv"
+CONFIG_DIR="/etc/vigie"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 SURICATA_RULES_DIR="/etc/suricata/rules"
 SURICATA_YAML="/etc/suricata/suricata.yaml"
-SYSTEMD_GUARD="/etc/systemd/system/suricata-guard.service"
-LOGROTATE_FILE="/etc/logrotate.d/suricata-guard"
-INSTALL_LOG="/var/log/suricata_guard_install.log"
-UNINSTALL_SRC="${WORKDIR}/uninstall_suricata_guard.sh"
+SYSTEMD_VIGIE="/etc/systemd/system/vigie.service"
+LOGROTATE_FILE="/etc/logrotate.d/vigie"
+INSTALL_LOG="/var/log/vigie_install.log"
+UNINSTALL_SRC="${WORKDIR}/uninstall_vigie.sh"
 
 # ───────────────────────── FONCTIONS UI ──────────────────────────────
 
@@ -107,7 +107,7 @@ die() {
 spinner_run() {
     # Exécute une commande en arrière-plan avec un spinner, log la sortie
     local msg="$1"; shift
-    local logfile="/tmp/suricata_guard_step_$$.log"
+    local logfile="/tmp/vigie_step_$$.log"
     ("$@") > "$logfile" 2>&1 &
     local pid=$!
     local sp='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
@@ -195,9 +195,9 @@ check_prerequisites() {
     ok "Système basé sur apt détecté"
 
     if [ ! -f "$PY_SCRIPT_SRC" ]; then
-        die "Fichier introuvable : $PY_SCRIPT_SRC (place suricata_guard.py dans le même dossier que ce script)"
+        die "Fichier introuvable : $PY_SCRIPT_SRC (place vigie.py dans le même dossier que ce script)"
     fi
-    ok "suricata_guard.py trouvé"
+    ok "vigie.py trouvé"
 
     if [ ! -f "$RULES_SRC" ]; then
         die "Fichier introuvable : $RULES_SRC (place local.rules dans le même dossier que ce script)"
@@ -448,18 +448,18 @@ PYEOF
 # ════════════════════════════════════════════════════════════════════
 
 configure_iptables() {
-    step "Configuration de la chaîne iptables SURICATA_GUARD"
+    step "Configuration de la chaîne iptables VIGIE"
 
-    if ! iptables -L SURICATA_GUARD -n >/dev/null 2>&1; then
-        iptables -N SURICATA_GUARD
-        ok "Chaîne SURICATA_GUARD créée"
+    if ! iptables -L VIGIE -n >/dev/null 2>&1; then
+        iptables -N VIGIE
+        ok "Chaîne VIGIE créée"
     else
-        ok "Chaîne SURICATA_GUARD déjà existante"
+        ok "Chaîne VIGIE déjà existante"
     fi
 
-    if ! iptables -C INPUT -j SURICATA_GUARD >/dev/null 2>&1; then
-        iptables -I INPUT -j SURICATA_GUARD
-        ok "Chaîne SURICATA_GUARD reliée à INPUT"
+    if ! iptables -C INPUT -j VIGIE >/dev/null 2>&1; then
+        iptables -I INPUT -j VIGIE
+        ok "Chaîne VIGIE reliée à INPUT"
     else
         ok "Chaîne déjà reliée à INPUT"
     fi
@@ -468,7 +468,7 @@ configure_iptables() {
 }
 
 # ════════════════════════════════════════════════════════════════════
-#   ÉTAPE 5 — DÉPLOIEMENT DU SCRIPT PYTHON (suricata_guard.py)
+#   ÉTAPE 5 — DÉPLOIEMENT DU SCRIPT PYTHON (vigie.py)
 # ════════════════════════════════════════════════════════════════════
 
 write_config() {
@@ -554,7 +554,7 @@ PYEOF
 }
 
 deploy_python_script() {
-    step "Déploiement de suricata_guard.py"
+    step "Déploiement de vigie.py"
 
     mkdir -p "$(dirname "$PY_SCRIPT_DST")"
     cp "$PY_SCRIPT_SRC" "$PY_SCRIPT_DST"
@@ -569,16 +569,16 @@ deploy_python_script() {
 
     # Script de désinstallation toujours disponible sur le serveur
     if [ -f "$UNINSTALL_SRC" ]; then
-        cp "$UNINSTALL_SRC" "$(dirname "$PY_SCRIPT_DST")/uninstall_suricata_guard.sh"
-        chmod 700 "$(dirname "$PY_SCRIPT_DST")/uninstall_suricata_guard.sh"
+        cp "$UNINSTALL_SRC" "$(dirname "$PY_SCRIPT_DST")/uninstall_vigie.sh"
+        chmod 700 "$(dirname "$PY_SCRIPT_DST")/uninstall_vigie.sh"
         ok "Désinstalleur copié dans $(dirname "$PY_SCRIPT_DST")/"
     fi
 
     # Rotation des journaux (copytruncate : le bot détecte aussi la troncature)
     cat > "$LOGROTATE_FILE" << LREOF
-/var/log/suricata_guard.log
-/var/log/suricata_blocked.log
-/var/log/suricata_guard_service.log
+/var/log/vigie.log
+/var/log/vigie_blocked.log
+/var/log/vigie_service.log
 {
     weekly
     rotate 8
@@ -604,11 +604,11 @@ setup_python_venv() {
 # ════════════════════════════════════════════════════════════════════
 
 create_systemd_service() {
-    step "Création du service systemd suricata-guard.service"
+    step "Création du service systemd vigie.service"
 
-    cat > "$SYSTEMD_GUARD" << SERVICEEOF
+    cat > "$SYSTEMD_VIGIE" << SERVICEEOF
 [Unit]
-Description=Suricata Guard - Bot Telegram/Email + Blocage IP auto (by ${SIGNATURE})
+Description=Vigie - Bot Telegram/Email + Blocage IP auto (by ${SIGNATURE})
 After=network.target suricata.service
 Wants=suricata.service
 
@@ -618,18 +618,18 @@ ExecStart=${PY_VENV}/bin/python3 ${PY_SCRIPT_DST}
 Restart=always
 RestartSec=5
 User=root
-StandardOutput=append:/var/log/suricata_guard_service.log
-StandardError=append:/var/log/suricata_guard_service.log
+StandardOutput=append:/var/log/vigie_service.log
+StandardError=append:/var/log/vigie_service.log
 
 [Install]
 WantedBy=multi-user.target
 SERVICEEOF
 
-    ok "Fichier service créé : $SYSTEMD_GUARD"
+    ok "Fichier service créé : $SYSTEMD_VIGIE"
 
     spinner_run "Rechargement systemd" systemctl daemon-reload
     spinner_run "Activation de suricata.service au boot" systemctl enable suricata
-    spinner_run "Activation de suricata-guard.service au boot" systemctl enable suricata-guard
+    spinner_run "Activation de vigie.service au boot" systemctl enable vigie
 }
 
 start_services() {
@@ -644,13 +644,13 @@ start_services() {
         warn "Suricata ne semble pas actif — vérifie : journalctl -u suricata -n 50"
     fi
 
-    spinner_run "Démarrage de suricata-guard" systemctl restart suricata-guard
+    spinner_run "Démarrage de vigie" systemctl restart vigie
     sleep 2
 
-    if systemctl is-active --quiet suricata-guard; then
-        ok "suricata-guard est actif"
+    if systemctl is-active --quiet vigie; then
+        ok "vigie est actif"
     else
-        warn "suricata-guard ne semble pas actif — vérifie : journalctl -u suricata-guard -n 50"
+        warn "vigie ne semble pas actif — vérifie : journalctl -u vigie -n 50"
     fi
 }
 
@@ -673,16 +673,16 @@ EOF
     echo -e "    📁 Règles Suricata        : ${CYA}${SURICATA_RULES_DIR}/local.rules${NC}"
     echo -e "    🐍 Script Python          : ${CYA}${PY_SCRIPT_DST}${NC}"
     echo -e "    🔧 Service Suricata       : ${CYA}systemctl status suricata${NC}"
-    echo -e "    🔧 Service Guard          : ${CYA}systemctl status suricata-guard${NC}"
+    echo -e "    🔧 Service Vigie          : ${CYA}systemctl status vigie${NC}"
     echo -e "    📋 Log d'installation     : ${CYA}${INSTALL_LOG}${NC}"
-    echo -e "    📋 Log du guard           : ${CYA}/var/log/suricata_guard_service.log${NC}"
+    echo -e "    📋 Log du service           : ${CYA}/var/log/vigie_service.log${NC}"
     echo ""
     echo -e "  ${BLD}Commandes utiles :${NC}"
-    echo -e "    ${YEL}journalctl -u suricata-guard -f${NC}      → suivre les logs en direct"
-    echo -e "    ${YEL}iptables -S SURICATA_GUARD${NC}           → voir les IPs bloquées"
-    echo -e "    ${YEL}systemctl restart suricata-guard${NC}     → redémarrer le bot"
-    echo -e "    ${YEL}systemctl stop suricata-guard${NC}        → arrêter le bot (les blocages restent)"
-    echo -e "    ${YEL}bash /opt/suricata-guard/uninstall_suricata_guard.sh${NC}  → tout arrêter et supprimer"
+    echo -e "    ${YEL}journalctl -u vigie -f${NC}      → suivre les logs en direct"
+    echo -e "    ${YEL}iptables -S VIGIE${NC}           → voir les IPs bloquées"
+    echo -e "    ${YEL}systemctl restart vigie${NC}     → redémarrer le bot"
+    echo -e "    ${YEL}systemctl stop vigie${NC}        → arrêter le bot (les blocages restent)"
+    echo -e "    ${YEL}bash /opt/vigie/uninstall_vigie.sh${NC}  → tout arrêter et supprimer"
     echo ""
     if [ "$TELEGRAM_ENABLED" = "o" ]; then
         echo -e "  ${GRN}→ Va sur Telegram et envoie /start à ton bot pour voir le menu.${NC}"
