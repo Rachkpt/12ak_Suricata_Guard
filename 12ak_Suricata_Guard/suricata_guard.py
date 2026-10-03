@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-suricata_guard.py 
+suricata_guard.py
 ━━━━━━━━━━━━━━━━━━━━━━━
-✅ Monitore fast.log en temps réel (polling 50ms)
-✅ NMAP / Attaques / DDoS → Blocage immédiat + Alerte Telegram + Mail
-✅ PING / ICMP            → Silencieux (visible via /ping)
-✅ Bot Telegram avec menu épinglé + commandes slash
-✅ Notifications Email (Gmail ou SMTP custom)
+✅ Surveille fast.log de Suricata en temps réel (polling 50 ms)
+✅ NMAP / attaques / DDoS → blocage immédiat iptables + alerte Telegram + mail
+✅ Seuil glissant pour les autres alertes
+✅ PING / ICMP            → silencieux (visible via /ping)
+✅ Bot Telegram réservé à UN chat (chat_id configuré)
+✅ Notifications email (Gmail, Outlook ou SMTP custom)
+
+Configuration : /etc/suricata-guard/config.json (généré par l'installeur)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Outil développé et signé par : 12ak_H4ck
@@ -15,85 +18,93 @@ suricata_guard.py
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import re
-import time
-import subprocess
+from __future__ import annotations
+
+import asyncio
+import html
+import ipaddress
+import json
 import logging
 import os
+import re
+import shutil
 import signal
-import sys
-import threading
-import asyncio
 import smtplib
 import ssl
+import subprocess
+import sys
+import threading
+import time
+from collections import defaultdict, deque
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from collections import defaultdict
-from datetime import datetime
 
-# ─────────────────────── DÉPENDANCES ───────────────────────────
 try:
-    from telegram import (
-        Update, BotCommand,
-        ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-    )
+    from telegram import BotCommand, KeyboardButton, ReplyKeyboardMarkup, Update
     from telegram.ext import (
-        ApplicationBuilder, CommandHandler, MessageHandler,
-        ContextTypes, filters
+        ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters,
     )
-except ImportError:
-    print("❌  pip install python-telegram-bot --break-system-packages")
-    sys.exit(1)
+    TELEGRAM_AVAILABLE = True
+except ImportError:  # le blocage et les mails fonctionnent sans Telegram
+    TELEGRAM_AVAILABLE = False
 
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                        CONFIG                               ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-FAST_LOG        = "/var/log/suricata/fast.log"
-LOG_FILE        = "/var/log/suricata_guard.log"
-BLOCKED_LOG     = "/var/log/suricata_blocked.log"
-IPTABLES        = "/sbin/iptables"
-ALERT_THRESHOLD = __ALERT_THRESHOLD__
-CHAIN           = "SURICATA_GUARD"
+VERSION          = "4.1"
+CONFIG_FILE      = os.environ.get("SURICATA_GUARD_CONFIG", "/etc/suricata-guard/config.json")
+LOG_FILE         = os.environ.get("SURICATA_GUARD_LOG", "/var/log/suricata_guard.log")
+BLOCKED_LOG      = os.environ.get("SURICATA_BLOCKED_LOG", "/var/log/suricata_blocked.log")
+IPTABLES         = shutil.which("iptables") or "/sbin/iptables"
+CHAIN            = "SURICATA_GUARD"
+MAX_RULES_REMOVE = 50  # sécurité : nombre max de règles DROP retirées pour une même IP
 
 # ── SIGNATURE OUTIL (NE PAS MODIFIER) ───────────────────────────
 TOOL_SIGNATURE   = "12ak_H4ck"
 TOOL_AUTHOR_FULL = "Aledji Ar-Rachad"
 
+
+def load_config(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        sys.exit(f"Configuration introuvable : {path} (relance l'installeur)")
+    except json.JSONDecodeError as e:
+        sys.exit(f"Configuration invalide ({path}) : {e}")
+
+
+CFG = load_config(CONFIG_FILE)
+
+FAST_LOG        = CFG.get("fast_log", "/var/log/suricata/fast.log")
+ALERT_THRESHOLD = int(CFG.get("alert_threshold", 5))
+ALERT_WINDOW    = int(CFG.get("alert_window_seconds", 600))
+
 # ── TELEGRAM ────────────────────────────────────────────────────
-TELEGRAM_TOKEN   = "__TELEGRAM_TOKEN__"
-TELEGRAM_CHAT_ID = __TELEGRAM_CHAT_ID__        # ton chat_id (int)
+TELEGRAM_TOKEN   = CFG.get("telegram_token", "")
+TELEGRAM_CHAT_ID = int(CFG.get("telegram_chat_id") or 0)
+TELEGRAM_ENABLED = (
+    bool(CFG.get("telegram_enabled")) and bool(TELEGRAM_TOKEN) and TELEGRAM_CHAT_ID != 0
+)
 
-# ── EMAIL ────────────────────────────────────────────────────────
-EMAIL_ENABLED    = __EMAIL_ENABLED__             # Active/désactive les mails
+# ── EMAIL ───────────────────────────────────────────────────────
+EMAIL_ENABLED  = bool(CFG.get("email_enabled"))
+EMAIL_PROVIDER = CFG.get("email_provider", "gmail")
+EMAIL_FROM     = CFG.get("email_from", "")
+EMAIL_PASSWORD = CFG.get("email_password", "")
+EMAIL_TO       = list(CFG.get("email_to", []))
+SMTP_HOST      = CFG.get("smtp_host", "")
+SMTP_PORT      = int(CFG.get("smtp_port", 587))
+SMTP_USE_TLS   = bool(CFG.get("smtp_use_tls", True))
 
-# Choix du provider : "gmail" | "outlook" | "custom"
-EMAIL_PROVIDER   = "__EMAIL_PROVIDER__"
+MAIL_ON_BLOCK   = True
+MAIL_ON_UNBLOCK = True
+MAIL_ON_START   = True
 
-# Ton adresse mail expéditeur
-EMAIL_FROM       = "__EMAIL_FROM__"
-
-# Mot de passe (Gmail → mot de passe d'application, pas ton vrai mdp !)
-# Gmail  : https://myaccount.google.com/apppasswords
-# Outlook: ton mot de passe normal
-EMAIL_PASSWORD   = "__EMAIL_PASSWORD__"
-
-# Destinataire(s) — tu peux en mettre plusieurs séparés par des virgules
-EMAIL_TO         = __EMAIL_TO__
-
-# ── SMTP custom (uniquement si EMAIL_PROVIDER = "custom") ────────
-SMTP_HOST        = "__SMTP_HOST__"
-SMTP_PORT        = __SMTP_PORT__
-SMTP_USE_TLS     = __SMTP_USE_TLS__
-
-# ── Événements qui déclenchent un mail ──────────────────────────
-MAIL_ON_BLOCK    = True    # IP bloquée (NMAP / DDoS / flood)
-MAIL_ON_THRESHOLD= True    # Seuil d'alertes atteint
-MAIL_ON_START    = True    # Démarrage du service
-MAIL_ON_UNBLOCK  = True    # IP débloquée via Telegram
-
-# ── Mots-clés blocage immédiat + alerte Telegram + mail ─────────
+# ── Mots-clés : blocage immédiat (testé AVANT le mode silencieux) ──
 INSTANT_BLOCK_KEYWORDS = [
     "NMAP", "PORT SCAN", "SCAN FRAG", "SCAN SHELL",
     "HPING3", "HPING", "DDOS", "DOS", "FLOOD",
@@ -103,21 +114,33 @@ INSTANT_BLOCK_KEYWORDS = [
     "RDP BRUTE-FORCE", "SMB SCAN", "SMB BRUTEFORCE",
     "DNS AMPLIFICATION", "DNS AMP", "SLOWLORIS",
     "SSL SCAN", "TLS SCAN", "FTP BRUTEFORCE", "WEB BRUTEFORCE",
-    "SQLI", "SQL INJECTION", "XSS", "WEBSHELL", "C2 ",
+    "SQLI", "SQL INJECTION", "XSS", "WEBSHELL", "C2",
     "EXPLOIT", "BACKDOOR", "BOTNET",
 ]
 
-# ── Silencieux : stocké mais pas de notif auto ───────────────────
+# ── Silencieux : stocké (/ping) mais pas de notification ─────────
 SILENT_KEYWORDS = [
     "PING ICMP", "ICMP DÉTECTÉ", "ICMP DETECTE",
     "PING DETECTED", "ICMP", "PING",
 ]
 
-WHITELIST = {
-    "127.0.0.1",
-    "::1",
-__WHITELIST_IPS__
-}
+
+def _compile_keywords(words: list) -> re.Pattern:
+    """Mots courts : mot entier (évite « DOS » dans « DOSSIER »).
+    Mots longs : début de mot (« SHELL » trouve « SHELLCODE »)."""
+    alts = []
+    for w in words:
+        esc = re.escape(w)
+        alts.append(rf"\b{esc}\b" if len(w) <= 4 else rf"\b{esc}")
+    return re.compile("|".join(alts), re.IGNORECASE)
+
+
+INSTANT_RE = _compile_keywords(INSTANT_BLOCK_KEYWORDS)
+SILENT_RE  = _compile_keywords(SILENT_KEYWORDS)
+NMAP_RE    = re.compile(r"NMAP|PORT SCAN|SCAN FRAG|XMAS", re.IGNORECASE)
+PING_NMAP_RE = re.compile(r"NMAP|PORT SCAN|SCAN|PING|ICMP|XMAS|RECON", re.IGNORECASE)
+
+WHITELIST = {"127.0.0.1", "::1"} | set(CFG.get("whitelist", []))
 
 # ── Libellés des boutons (clavier fixe en bas) ───────────────────
 BTN_LAST_ALERTS = "⚠️ 10 Dernières Alertes"
@@ -131,29 +154,16 @@ BTN_UNBLOCK_ALL = "🔓 TOUT Débloquer"
 UNBLOCK_PREFIX  = "🔓 Débloquer "
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║                       LOGGING                               ║
-# ╚══════════════════════════════════════════════════════════════╝
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout),
-    ]
-)
-log = logging.getLogger("suricata_guard")
-
-# ╔══════════════════════════════════════════════════════════════╗
 # ║                      ÉTAT GLOBAL                            ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-alert_count    = defaultdict(int)
-blocked_ips    = set()
-recent_alerts  = []
-ping_alerts    = []
-MAX_ALERTS_MEM = 100
-MAX_PING_MEM   = 50
+log = logging.getLogger("suricata_guard")
+
+STATE_LOCK    = threading.RLock()
+blocked_ips   = set()
+alert_hits    = defaultdict(deque)   # ip -> timestamps des alertes (fenêtre glissante)
+recent_alerts = deque(maxlen=100)
+ping_alerts   = deque(maxlen=50)
 
 _bot_loop      = None
 _telegram_app  = None
@@ -166,133 +176,145 @@ LINE_RE = re.compile(
     r"\s*->\s*"
     r"([\d\.]+|[0-9a-fA-F:]+)"
 )
+IPV4_RULE_RE = re.compile(r"-s\s+([0-9.]+)(?:/32)?\s+-j\s+DROP")
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║                        LOGGING                              ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+def setup_logging():
+    handlers = [logging.StreamHandler(sys.stdout)]
+    try:
+        handlers.append(logging.FileHandler(LOG_FILE))
+    except OSError as e:
+        print(f"⚠ Impossible d'ouvrir {LOG_FILE} : {e}")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+    )
+
+
+def is_ipv4(ip: str) -> bool:
+    try:
+        ipaddress.IPv4Address(ip)
+        return True
+    except ValueError:
+        return False
+
+
+def _esc(value) -> str:
+    """Échappe pour le mode HTML de Telegram (évite les messages rejetés)."""
+    return html.escape(str(value), quote=False)
+
+
+def _is_blocked(ip: str) -> bool:
+    with STATE_LOCK:
+        return ip in blocked_ips
+
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                    ENVOI EMAIL                              ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-# Config SMTP selon provider
-SMTP_CONFIGS = {
-    "gmail":   {"host": "smtp.gmail.com",    "port": 587, "tls": True},
-    "outlook": {"host": "smtp.outlook.com",  "port": 587, "tls": True},
-    "custom":  {"host": SMTP_HOST,           "port": SMTP_PORT, "tls": SMTP_USE_TLS},
+SMTP_PRESETS = {
+    "gmail":   ("smtp.gmail.com", 587, True),
+    "outlook": ("smtp.outlook.com", 587, True),
 }
 
 
+def _smtp_params():
+    if EMAIL_PROVIDER in SMTP_PRESETS:
+        return SMTP_PRESETS[EMAIL_PROVIDER]
+    return SMTP_HOST, SMTP_PORT, SMTP_USE_TLS
+
+
 def send_email(subject: str, body_html: str):
-    """Envoie un mail HTML dans un thread séparé pour ne pas bloquer."""
-    if not EMAIL_ENABLED:
+    """Envoie un mail dans un thread séparé pour ne pas bloquer."""
+    if not EMAIL_ENABLED or not EMAIL_TO:
         return
-    threading.Thread(
-        target=_send_email_sync,
-        args=(subject, body_html),
-        daemon=True
-    ).start()
+    threading.Thread(target=_send_email_sync, args=(subject, body_html), daemon=True).start()
 
 
 def _send_email_sync(subject: str, body_html: str):
-    """Envoi SMTP synchrone (exécuté dans un thread séparé)."""
     try:
-        cfg = SMTP_CONFIGS.get(EMAIL_PROVIDER, SMTP_CONFIGS["custom"])
-
+        host, port, use_tls = _smtp_params()
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = EMAIL_FROM
-        msg["To"]      = ", ".join(EMAIL_TO)
-
-        # Version texte simple (fallback)
+        msg["From"] = EMAIL_FROM
+        msg["To"] = ", ".join(EMAIL_TO)
         text_plain = re.sub(r"<[^>]+>", "", body_html).strip()
         msg.attach(MIMEText(text_plain, "plain", "utf-8"))
-        msg.attach(MIMEText(body_html,  "html",  "utf-8"))
+        msg.attach(MIMEText(body_html, "html", "utf-8"))
 
         context = ssl.create_default_context()
-        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=10) as server:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=15, context=context)
+        else:
+            server = smtplib.SMTP(host, port, timeout=15)
+        with server:
             server.ehlo()
-            if cfg["tls"]:
+            if use_tls and port != 465:
                 server.starttls(context=context)
                 server.ehlo()
             server.login(EMAIL_FROM, EMAIL_PASSWORD)
             server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
-
         log.info(f"📧 Mail envoyé : {subject}")
-
     except Exception as e:
-        log.error(f"❌ Erreur envoi mail: {e}")
+        log.error(f"❌ Erreur envoi mail : {e}")
+
+
+def _mail_html(color: str, title: str, rows: list, footer_html: str = "") -> str:
+    rows_html = "".join(
+        f'<tr style="{"background:#f9f9f9;" if i % 2 else ""}">'
+        f'<td style="padding:8px;font-weight:bold;color:#555;">{_esc(k)}</td>'
+        f'<td style="padding:8px;font-family:monospace;">{_esc(v)}</td></tr>'
+        for i, (k, v) in enumerate(rows)
+    )
+    return f"""<html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
+<div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;border-left:5px solid {color};padding:20px;">
+<h2 style="color:{color};">{_esc(title)}</h2>
+<table style="width:100%;border-collapse:collapse;">{rows_html}</table>
+<p style="color:#888;font-size:12px;">{footer_html}</p>
+<p style="color:#aaa;font-size:11px;">Suricata Guard v{VERSION} — by {TOOL_SIGNATURE}</p>
+</div></body></html>"""
 
 
 def make_email_block(ip: str, reason: str, ts: str) -> tuple:
-    """Génère le sujet + corps HTML pour un mail de blocage."""
     subject = f"🚨 [Suricata] IP BLOQUÉE : {ip}"
-    body = f"""
-    <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
-      <div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;
-                  border-left:5px solid #e74c3c;padding:20px;">
-        <h2 style="color:#e74c3c;">🚨 Alerte Suricata Guard</h2>
-        <table style="width:100%;border-collapse:collapse;">
-          <tr><td style="padding:8px;font-weight:bold;color:#555;">Statut</td>
-              <td style="padding:8px;color:#e74c3c;font-weight:bold;">IP BLOQUÉE</td></tr>
-          <tr style="background:#f9f9f9;">
-              <td style="padding:8px;font-weight:bold;color:#555;">IP</td>
-              <td style="padding:8px;font-family:monospace;font-size:16px;">{ip}</td></tr>
-          <tr><td style="padding:8px;font-weight:bold;color:#555;">Raison</td>
-              <td style="padding:8px;">{reason}</td></tr>
-          <tr style="background:#f9f9f9;">
-              <td style="padding:8px;font-weight:bold;color:#555;">Date/Heure</td>
-              <td style="padding:8px;">{ts}</td></tr>
-          <tr><td style="padding:8px;font-weight:bold;color:#555;">Action</td>
-              <td style="padding:8px;color:#e74c3c;">DROP via iptables</td></tr>
-        </table>
-        <hr style="margin:20px 0;border:none;border-top:1px solid #eee;">
-        <p style="color:#888;font-size:12px;">
-          Pour débloquer : <code>sudo iptables -D {CHAIN} -s {ip} -j DROP</code><br>
-          Ou via le bot Telegram → menu Débloquer.
-        </p>
-        <p style="color:#aaa;font-size:11px;">Suricata Guard v4.0 — {datetime.now().strftime('%Y')}</p>
-      </div>
-    </body></html>
-    """
+    body = _mail_html(
+        "#e74c3c", "🚨 Alerte Suricata Guard",
+        [("Statut", "IP BLOQUÉE"), ("IP", ip), ("Raison", reason),
+         ("Date/Heure", ts), ("Action", "DROP via iptables")],
+        footer_html=(
+            f"Pour débloquer : <code>sudo iptables -D {CHAIN} -s {_esc(ip)} -j DROP</code>"
+            "<br>Ou via le bot Telegram → 🔓 Débloquer une IP."
+        ),
+    )
     return subject, body
 
 
 def make_email_unblock(ip: str) -> tuple:
     subject = f"✅ [Suricata] IP DÉBLOQUÉE : {ip}"
-    body = f"""
-    <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
-      <div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;
-                  border-left:5px solid #2ecc71;padding:20px;">
-        <h2 style="color:#2ecc71;">✅ IP Débloquée</h2>
-        <p>L'IP <strong style="font-family:monospace;">{ip}</strong> a été débloquée
-        via le bot Telegram le <strong>{datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}</strong>.</p>
-        <p style="color:#aaa;font-size:11px;">Suricata Guard v4.0</p>
-      </div>
-    </body></html>
-    """
+    body = _mail_html(
+        "#2ecc71", "✅ IP débloquée",
+        [("IP", ip), ("Date/Heure", datetime.now().strftime("%d/%m/%Y %H:%M:%S"))],
+        footer_html="Débloquée via le bot Telegram ou le script de désinstallation.",
+    )
     return subject, body
 
 
 def make_email_start() -> tuple:
     subject = "🛡️ [Suricata] Service démarré"
-    body = f"""
-    <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
-      <div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;
-                  border-left:5px solid #3498db;padding:20px;">
-        <h2 style="color:#3498db;">🛡️ Suricata Guard v4.0 démarré</h2>
-        <table style="width:100%;border-collapse:collapse;">
-          <tr><td style="padding:8px;font-weight:bold;color:#555;">Date</td>
-              <td style="padding:8px;">{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}</td></tr>
-          <tr style="background:#f9f9f9;">
-              <td style="padding:8px;font-weight:bold;color:#555;">Seuil blocage</td>
-              <td style="padding:8px;">{ALERT_THRESHOLD} alertes</td></tr>
-          <tr><td style="padding:8px;font-weight:bold;color:#555;">Log surveillé</td>
-              <td style="padding:8px;font-family:monospace;">{FAST_LOG}</td></tr>
-          <tr style="background:#f9f9f9;">
-              <td style="padding:8px;font-weight:bold;color:#555;">Chaîne iptables</td>
-              <td style="padding:8px;font-family:monospace;">{CHAIN}</td></tr>
-        </table>
-        <p style="color:#aaa;font-size:11px;">Suricata Guard v4.0 — by {TOOL_SIGNATURE}</p>
-      </div>
-    </body></html>
-    """
+    body = _mail_html(
+        "#3498db", f"🛡️ Suricata Guard v{VERSION} démarré",
+        [("Date", datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
+         ("Seuil blocage", f"{ALERT_THRESHOLD} alertes / {ALERT_WINDOW} s"),
+         ("Log surveillé", FAST_LOG),
+         ("Chaîne iptables", CHAIN),
+         ("Telegram", "activé" if TELEGRAM_ENABLED else "désactivé")],
+    )
     return subject, body
 
 
@@ -300,228 +322,346 @@ def make_email_start() -> tuple:
 # ║                  TELEGRAM HELPERS                           ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-def tg_send(message: str):
-    if _bot_loop is None or _telegram_app is None:
-        return
-    asyncio.run_coroutine_threadsafe(
-        _telegram_app.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=message,
-            parse_mode="HTML"
-        ),
-        _bot_loop
-    )
-
-
-def get_blocked_ips_list() -> list:
-    """
-    Retourne la liste des IPs actuellement bloquées dans la chaîne
-    SURICATA_GUARD en parsant la sortie de `iptables -L CHAIN -n -v`.
-
-    On utilise -v (verbose) qui donne un format stable avec des colonnes
-    alignées, et on repère la colonne IP source en cherchant le premier
-    token qui ressemble à une adresse IP (ou "0.0.0.0/0" pour "any"),
-    plutôt que de se fier à un index fixe — ça évite le bug où la
-    chaîne pointait sur le mauvais champ ("--") au lieu de l'IP.
-    """
+def _log_tg_result(fut):
     try:
-        result = subprocess.run(
-            [IPTABLES, "-L", CHAIN, "-n", "-v", "--line-numbers"],
-            capture_output=True, text=True
-        )
-    except Exception as e:
-        log.error(f"Erreur lecture iptables : {e}")
-        return []
-
-    ip_re = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?$")
-    ips = []
-    for line in result.stdout.strip().split("\n"):
-        if "DROP" not in line:
-            continue
-        parts = line.split()
-        # On cherche, après les colonnes fixes (num/pkts/bytes/target/prot/opt/in/out),
-        # le premier champ qui matche un format IP — c'est la source.
-        for tok in parts:
-            if ip_re.match(tok) and tok != "0.0.0.0/0":
-                ips.append(tok)
-                break
-    return ips
+        exc = fut.exception()
+    except Exception:
+        return
+    if exc is not None:
+        log.error(f"❌ Envoi Telegram échoué : {exc}")
 
 
-def build_main_menu() -> ReplyKeyboardMarkup:
-    keyboard = [
-        [KeyboardButton(BTN_LAST_ALERTS), KeyboardButton(BTN_PING_NMAP)],
-        [KeyboardButton(BTN_MALICIOUS),   KeyboardButton(BTN_BLOCKED)],
-        [KeyboardButton(BTN_UNBLOCK),     KeyboardButton(BTN_REFRESH)],
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, is_persistent=True
+def tg_send(message: str):
+    if not TELEGRAM_ENABLED or _bot_loop is None or _telegram_app is None:
+        return
+    fut = asyncio.run_coroutine_threadsafe(
+        _telegram_app.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="HTML"),
+        _bot_loop,
     )
+    fut.add_done_callback(_log_tg_result)
 
 
-def build_unblock_menu() -> ReplyKeyboardMarkup:
-    """
-    Clavier fixe en bas listant chaque IP bloquée comme un bouton
-    "🔓 Débloquer X.X.X.X", plus un bouton pour tout débloquer et un
-    retour au menu principal.
-    """
-    ips = get_blocked_ips_list()
-    keyboard = []
-    for ip in ips[:15]:
-        keyboard.append([KeyboardButton(f"{UNBLOCK_PREFIX}{ip}")])
-    if ips:
-        keyboard.append([KeyboardButton(BTN_UNBLOCK_ALL)])
-    keyboard.append([KeyboardButton(BTN_BACK)])
-    return ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, is_persistent=True
-    )
+def _join_limited(header: str, blocks: list, limit: int = 4000) -> str:
+    """Assemble des blocs HTML complets sans jamais dépasser la limite Telegram
+    (couper au milieu d'une balise <code> casserait le message)."""
+    out, size = [header], len(header)
+    for block in blocks:
+        if size + len(block) + 2 > limit:
+            out.append("<i>… (liste tronquée)</i>")
+            break
+        out.append(block)
+        size += len(block) + 2
+    return "\n\n".join(out)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║              CONSTRUCTEURS DE TEXTE (réutilisables)          ║
+# ║                 COMMANDES IPTABLES                          ║
 # ╚══════════════════════════════════════════════════════════════╝
-# Ces fonctions retournent uniquement le texte du message — elles sont
-# utilisées à la fois par les commandes slash (/ping, /nmap, /blocked...)
-# et par le gestionnaire des boutons du clavier fixe, pour éviter toute
-# duplication et garantir que les deux affichent toujours la même chose.
+
+def _run(cmd: list, timeout: int = 30):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.error(f"Commande impossible {' '.join(cmd)} : {e}")
+        return None
+
+
+def _rc(cmd: list) -> int:
+    res = _run(cmd)
+    return -1 if res is None else res.returncode
+
+
+def run_cmd(cmd: list) -> bool:
+    res = _run(cmd)
+    if res is None:
+        return False
+    if res.returncode != 0:
+        log.error(f"Échec : {' '.join(cmd)} → {res.stderr.strip()}")
+        return False
+    return True
+
+
+def parse_blocked_ips(iptables_output: str) -> list:
+    """Extrait les IPs de la sortie `iptables -S SURICATA_GUARD` (sans doublon)."""
+    seen, ips = set(), []
+    for line in iptables_output.splitlines():
+        m = IPV4_RULE_RE.search(line)
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            ips.append(m.group(1))
+    return ips
+
+
+def get_blocked_ips_list() -> list:
+    res = _run([IPTABLES, "-S", CHAIN])
+    if res is None or res.returncode != 0:
+        return []
+    return parse_blocked_ips(res.stdout)
+
+
+def persist_rules():
+    """Sauvegarde les règles pour qu'elles survivent à un redémarrage."""
+    if shutil.which("netfilter-persistent") is None:
+        return
+    threading.Thread(target=_run, args=(["netfilter-persistent", "save"], 60), daemon=True).start()
+
+
+def setup_chain():
+    _run([IPTABLES, "-N", CHAIN])  # erreur ignorée : la chaîne existe déjà
+    for chain in ("INPUT", "FORWARD"):
+        if _rc([IPTABLES, "-C", chain, "-j", CHAIN]) != 0:
+            run_cmd([IPTABLES, "-I", chain, "1", "-j", CHAIN])
+    with STATE_LOCK:
+        blocked_ips.update(get_blocked_ips_list())
+    log.info(f"Chaîne iptables '{CHAIN}' prête ({len(blocked_ips)} IP déjà bloquée(s)).")
+
+
+def block_ip(ip: str, reason: str, alert_msg: str = ""):
+    with STATE_LOCK:
+        if ip in blocked_ips or ip in WHITELIST:
+            return
+        blocked_ips.add(ip)
+        alert_hits.pop(ip, None)
+
+    if not run_cmd([IPTABLES, "-A", CHAIN, "-s", ip, "-j", "DROP"]):
+        with STATE_LOCK:
+            blocked_ips.discard(ip)
+        return
+    persist_rules()
+
+    log.warning(f"BLOQUÉ  {ip:<20} | {reason}")
+    ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    try:
+        with open(BLOCKED_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} | BLOCKED | {ip} | {reason}\n")
+    except OSError as e:
+        log.error(f"Impossible d'écrire {BLOCKED_LOG} : {e}")
+
+    tg_send(
+        "🚨 <b>ALERTE — IP BLOQUÉE</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"🌐 IP     : <code>{_esc(ip)}</code>\n"
+        f"📌 Détect : {_esc(alert_msg or reason)}\n"
+        "🔒 Action : DROP immédiat\n"
+        f"🕐 {ts}"
+    )
+    if MAIL_ON_BLOCK:
+        send_email(*make_email_block(ip, alert_msg or reason, ts))
+
+
+def unblock_ip(ip: str) -> bool:
+    """Retire TOUTES les règles DROP de cette IP (il peut y en avoir plusieurs)."""
+    removed = 0
+    for _ in range(MAX_RULES_REMOVE):
+        if _rc([IPTABLES, "-D", CHAIN, "-s", ip, "-j", "DROP"]) != 0:
+            break
+        removed += 1
+    with STATE_LOCK:
+        blocked_ips.discard(ip)
+        alert_hits.pop(ip, None)
+    if removed:
+        persist_rules()
+        log.info(f"IP {ip} débloquée ({removed} règle(s) retirée(s)).")
+        if MAIL_ON_UNBLOCK:
+            send_email(*make_email_unblock(ip))
+    return removed > 0
+
+
+def unblock_all() -> int:
+    count = len(get_blocked_ips_list())
+    _run([IPTABLES, "-F", CHAIN])
+    with STATE_LOCK:
+        blocked_ips.clear()
+        alert_hits.clear()
+    persist_rules()
+    log.info(f"Toutes les IPs débloquées ({count}).")
+    if MAIL_ON_UNBLOCK and count:
+        send_email(*make_email_unblock("TOUTES"))
+    return count
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║              CONSTRUCTEURS DE TEXTE (partagés)               ║
+# ╚══════════════════════════════════════════════════════════════╝
+# Utilisés à la fois par les commandes (/ping, /nmap…) et par les
+# boutons du clavier fixe : les deux affichent toujours la même chose.
+
+def _group_by_src(alerts: list) -> dict:
+    groups = {}
+    for a in alerts:  # ordre chronologique : on garde la dernière occurrence
+        g = groups.setdefault(a["src"], {"count": 0})
+        g["count"] += 1
+        g["msg"], g["time"] = a["msg"], a["time"]
+    return groups
+
+
+def _snapshot(dq: deque, n: int) -> list:
+    with STATE_LOCK:
+        return list(dq)[-n:]
+
+
+def _alert_block(a: dict) -> str:
+    status = "🚫 BLOQUÉ" if _is_blocked(a["src"]) else "⚠️ Alerte"
+    return (
+        f"🕐 <code>{_esc(a['time'])}</code>\n"
+        f"📌 {_esc(a['msg'])}\n"
+        f"🌐 <code>{_esc(a['src'])}</code> → <code>{_esc(a['dst'])}</code> "
+        f"[{_esc(a['proto'])}] {status}"
+    )
+
+
+def _group_block(ip: str, info: dict) -> str:
+    status = "🚫 BLOQUÉ" if _is_blocked(ip) else "⚠️ Libre"
+    return (
+        f"🌐 <code>{_esc(ip)}</code> [{status}]\n"
+        f"   📌 {_esc(info['msg'])}\n"
+        f"   🔁 {info['count']} fois | 🕐 {_esc(info['time'])}"
+    )
+
 
 def text_last_alerts() -> str:
-    if not recent_alerts:
+    last = _snapshot(recent_alerts, 10)
+    if not last:
         return "ℹ️  Aucune alerte pour l'instant."
-    last10 = recent_alerts[-10:]
-    lines = ["⚠️  <b>10 Dernières Alertes Suricata</b>\n"]
-    for a in reversed(last10):
-        status = "🚫 BLOQUÉ" if a["src"] in blocked_ips else "⚠️ Alerte"
-        lines.append(
-            f"🕐 <code>{a['time']}</code>\n"
-            f"📌 {a['msg']}\n"
-            f"🌐 <code>{a['src']}</code> → <code>{a['dst']}</code> [{a['proto']}]\n"
-            f"{status}\n"
-        )
-    return "\n".join(lines)[:4000]
+    blocks = [_alert_block(a) for a in reversed(last)]
+    return _join_limited("⚠️  <b>10 Dernières Alertes Suricata</b>", blocks)
+
+
+def text_logs() -> str:
+    last = _snapshot(recent_alerts, 10)
+    if not last:
+        return "ℹ️  Aucune alerte enregistrée."
+    blocks = [_alert_block(a) for a in reversed(last)]
+    return _join_limited("📋  <b>10 Derniers Logs Suricata</b>", blocks)
 
 
 def text_ping() -> str:
-    if not ping_alerts:
+    last = _snapshot(ping_alerts, 10)
+    if not last:
         return "✅  Aucun ping/ICMP détecté pour l'instant."
-    last = ping_alerts[-10:]
-    lines = ["🏓  <b>Alertes Ping / ICMP (silencieuses)</b>\n"]
-    for a in reversed(last):
-        status = "🚫 BLOQUÉ" if a["src"] in blocked_ips else "🟡 Libre"
-        lines.append(
-            f"🕐 <code>{a['time']}</code>\n"
-            f"🌐 <code>{a['src']}</code> → <code>{a['dst']}</code>\n"
-            f"📌 {a['msg']} | {status}\n"
-        )
-    return "\n".join(lines)[:4000]
+    blocks = [
+        f"🕐 <code>{_esc(a['time'])}</code>\n"
+        f"🌐 <code>{_esc(a['src'])}</code> → <code>{_esc(a['dst'])}</code>\n"
+        f"📌 {_esc(a['msg'])} | {'🚫 BLOQUÉ' if _is_blocked(a['src']) else '🟡 Libre'}"
+        for a in reversed(last)
+    ]
+    return _join_limited("🏓  <b>Alertes Ping / ICMP (silencieuses)</b>", blocks)
+
+
+def _scan_text(title: str, alerts: list, empty: str) -> str:
+    if not alerts:
+        return empty
+    groups = _group_by_src(alerts)
+    blocks = [_group_block(ip, info) for ip, info in groups.items()]
+    return _join_limited(title, blocks)
 
 
 def text_nmap() -> str:
-    nmap = [
-        a for a in recent_alerts
-        if any(k in a["msg"].upper() for k in ["NMAP", "PORT SCAN", "SCAN FRAG", "XMAS"])
-    ]
-    if not nmap:
-        return "✅  Aucun scan NMAP détecté pour l'instant."
-    seen = {}
-    for a in nmap:
-        ip = a["src"]
-        if ip not in seen:
-            seen[ip] = {"msg": a["msg"], "time": a["time"], "count": 0}
-        seen[ip]["count"] += 1
-    lines = ["🗺️  <b>Scans NMAP Détectés</b>\n"]
-    for ip, info in seen.items():
-        status = "🚫 BLOQUÉ" if ip in blocked_ips else "⚠️ Libre"
-        lines.append(
-            f"🌐 <code>{ip}</code> [{status}]\n"
-            f"   📌 {info['msg']}\n"
-            f"   🔁 {info['count']} fois | 🕐 {info['time']}\n"
-        )
-    return "\n".join(lines)[:4000]
+    alerts = [a for a in list(recent_alerts) if NMAP_RE.search(a["msg"])]
+    return _scan_text("🗺️  <b>Scans NMAP Détectés</b>", alerts,
+                      "✅  Aucun scan NMAP détecté pour l'instant.")
 
 
 def text_ping_nmap() -> str:
-    """Combine ping + nmap + tout type de scan/recon détecté."""
-    all_ips = [
-        a for a in recent_alerts
-        if any(k in a["msg"].upper() for k in
-               ["NMAP", "PORT SCAN", "SCAN", "PING", "ICMP", "XMAS", "RECON"])
-    ]
-    if not all_ips:
-        return (
-            "✅  Aucun scan ou ping détecté pour l'instant.\n"
-            "<i>Ce menu se remplit automatiquement dès qu'un ping ou "
-            "un scan (NMAP, etc.) est détecté par Suricata.</i>"
-        )
-    seen = {}
-    for a in all_ips:
-        ip = a["src"]
-        if ip not in seen:
-            seen[ip] = {"msg": a["msg"], "time": a["time"], "count": 0}
-        seen[ip]["count"] += 1
-    lines = ["🔍  <b>IPs Ping / NMAP Détectées</b>\n"]
-    for ip, info in seen.items():
-        status = "🚫 BLOQUÉ" if ip in blocked_ips else "⚠️ Libre"
-        lines.append(
-            f"🌐 <code>{ip}</code> [{status}]\n"
-            f"   📌 {info['msg']}\n"
-            f"   🔁 {info['count']} fois | 🕐 {info['time']}\n"
-        )
-    return "\n".join(lines)[:4000]
+    alerts = [a for a in list(recent_alerts) if PING_NMAP_RE.search(a["msg"])]
+    return _scan_text(
+        "🔍  <b>IPs Ping / NMAP Détectées</b>", alerts,
+        "✅  Aucun scan ou ping détecté pour l'instant.\n"
+        "<i>Ce menu se remplit dès qu'un ping ou un scan est détecté par Suricata.</i>",
+    )
+
+
+def _read_tail(path: str, n: int):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return []
+    return [line.rstrip("\n") for line in lines[-n:] if line.strip()]
 
 
 def text_malicious() -> str:
     try:
-        result = subprocess.run(["tail", "-30", BLOCKED_LOG], capture_output=True, text=True)
-        raw = result.stdout.strip()
-    except Exception as e:
-        return f"❌ Erreur lecture log: {e}"
-    if not raw:
-        return "✅  Aucun log de blocage trouvé pour l'instant."
-    lines = ["🛑  <b>Log des IP Malveillantes</b>\n"]
-    for line in raw.split("\n")[-10:]:
-        parts = line.split("|")
-        if len(parts) >= 4:
-            lines.append(
-                f"🕐 {parts[0].strip()}\n"
-                f"🚫 <code>{parts[2].strip()}</code>\n"
-                f"📌 {parts[3].strip()}\n"
+        lines = _read_tail(BLOCKED_LOG, 10)
+    except OSError as e:
+        return f"❌ Erreur lecture log : {_esc(e)}"
+    if not lines:
+        return "✅  Aucun blocage enregistré pour l'instant."
+    blocks = []
+    for line in reversed(lines):
+        parts = line.split("|", 3)  # ts | BLOCKED | ip | raison
+        if len(parts) == 4:
+            blocks.append(
+                f"🕐 {_esc(parts[0].strip())}\n"
+                f"🚫 <code>{_esc(parts[2].strip())}</code>\n"
+                f"📌 {_esc(parts[3].strip())}"
             )
         else:
-            lines.append(f"<code>{line}</code>\n")
-    return "\n".join(lines)[:4000]
+            blocks.append(f"<code>{_esc(line)}</code>")
+    return _join_limited("🛑  <b>Log des IP malveillantes (dernières)</b>", blocks)
 
 
 def text_blocked() -> str:
     ips = get_blocked_ips_list()
     if not ips:
         return "✅  Aucune IP bloquée actuellement."
-    lines = [f"🚫  <b>IPs Bloquées ({len(ips)})</b>\n"]
-    for i, ip in enumerate(ips, 1):
-        lines.append(f"  #{i} → <code>{ip}</code>")
-    return "\n".join(lines)[:4000]
+    lines = [f"  #{i} → <code>{_esc(ip)}</code>" for i, ip in enumerate(ips, 1)]
+    return _join_limited(f"🚫  <b>IPs Bloquées ({len(ips)})</b>", ["\n".join(lines)])
 
 
 def text_about() -> str:
     return (
-        "🛡️  <b>Suricata Guard v4.0</b>\n"
+        f"🛡️  <b>Suricata Guard v{VERSION}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"🔰 Développé et signé par : <b>{TOOL_SIGNATURE}</b>\n"
         f"👤 {TOOL_AUTHOR_FULL}\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌐 IPs surveillées en temps réel via Suricata\n"
-        f"🚫 Blocage automatique iptables\n"
-        f"📊 Seuil de blocage : {ALERT_THRESHOLD} alertes"
+        "🌐 IPs surveillées en temps réel via Suricata\n"
+        "🚫 Blocage automatique iptables\n"
+        f"📊 Seuil : {ALERT_THRESHOLD} alertes / {ALERT_WINDOW} s"
     )
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║                 CLAVIERS TELEGRAM                           ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+def build_main_menu():
+    keyboard = [
+        [KeyboardButton(BTN_LAST_ALERTS), KeyboardButton(BTN_PING_NMAP)],
+        [KeyboardButton(BTN_MALICIOUS), KeyboardButton(BTN_BLOCKED)],
+        [KeyboardButton(BTN_UNBLOCK), KeyboardButton(BTN_REFRESH)],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
+
+def build_unblock_menu():
+    ips = get_blocked_ips_list()
+    keyboard = [[KeyboardButton(f"{UNBLOCK_PREFIX}{ip}")] for ip in ips[:15]]
+    if ips:
+        keyboard.append([KeyboardButton(BTN_UNBLOCK_ALL)])
+    keyboard.append([KeyboardButton(BTN_BACK)])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                 COMMANDES SLASH BOT                         ║
 # ╚══════════════════════════════════════════════════════════════╝
+# Le filtre CHAT_FILTER ne laisse passer que le chat configuré :
+# les messages des autres personnes ne reçoivent aucune réponse.
 
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+CHAT_FILTER = filters.Chat(chat_id=TELEGRAM_CHAT_ID) if TELEGRAM_AVAILABLE else None
+
+
+async def _reply(update, text: str, markup=None):
+    await update.message.reply_text(
+        text, parse_mode="HTML", reply_markup=markup or build_main_menu()
+    )
+
+
+async def cmd_start(update, ctx):
     msg = await update.message.reply_text(
-        "🛡️  <b>Suricata Guard v4.0</b>\n"
+        f"🛡️  <b>Suricata Guard v{VERSION}</b>\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "Utilise les boutons ci-dessous 👇 ou les commandes :\n"
         "/ping    — 🏓 Alertes Ping / ICMP\n"
@@ -532,218 +672,98 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n"
         f"🔰 by <b>{TOOL_SIGNATURE}</b>",
         reply_markup=build_main_menu(),
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
     try:
         await ctx.bot.pin_chat_message(
-            chat_id=update.effective_chat.id,
-            message_id=msg.message_id,
-            disable_notification=True
+            chat_id=update.effective_chat.id, message_id=msg.message_id, disable_notification=True
         )
     except Exception:
         pass
 
 
-async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🛡️  <b>Suricata Guard</b> — Menu",
-        reply_markup=build_main_menu(),
-        parse_mode="HTML"
-    )
+async def cmd_menu(update, ctx):
+    await _reply(update, "🛡️  <b>Suricata Guard</b> — Menu")
 
 
-async def cmd_ping(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(text_ping(), parse_mode="HTML", reply_markup=build_main_menu())
+async def cmd_ping(update, ctx):
+    await _reply(update, await asyncio.to_thread(text_ping))
 
 
-async def cmd_nmap(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(text_nmap(), parse_mode="HTML", reply_markup=build_main_menu())
+async def cmd_nmap(update, ctx):
+    await _reply(update, await asyncio.to_thread(text_nmap))
 
 
-async def cmd_blocked(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(text_blocked(), parse_mode="HTML", reply_markup=build_main_menu())
+async def cmd_blocked(update, ctx):
+    await _reply(update, await asyncio.to_thread(text_blocked))
 
 
-async def cmd_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not recent_alerts:
-        await update.message.reply_text("ℹ️  Aucune alerte enregistrée.", reply_markup=build_main_menu())
-        return
-    last10 = recent_alerts[-10:]
-    lines = ["📋  <b>10 Derniers Logs Suricata</b>\n"]
-    for a in reversed(last10):
-        status = "🚫 BLOQUÉ" if a["src"] in blocked_ips else "⚠️ Alerte"
-        lines.append(
-            f"🕐 <code>{a['time']}</code>\n"
-            f"📌 {a['msg']}\n"
-            f"🌐 <code>{a['src']}</code> → <code>{a['dst']}</code> [{a['proto']}] | {status}\n"
-        )
-    await update.message.reply_text(
-        "\n".join(lines)[:4000], parse_mode="HTML", reply_markup=build_main_menu()
-    )
+async def cmd_logs(update, ctx):
+    await _reply(update, await asyncio.to_thread(text_logs))
 
 
-async def cmd_about(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        text_about(), parse_mode="HTML", reply_markup=build_main_menu()
-    )
+async def cmd_about(update, ctx):
+    await _reply(update, text_about())
 
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║         GESTIONNAIRE DES BOUTONS (clavier fixe en bas)       ║
 # ╚══════════════════════════════════════════════════════════════╝
-# Avec un ReplyKeyboardMarkup, Telegram envoie le libellé du bouton
-# comme un simple message texte — on le traite donc ici comme du
-# "routing" sur le contenu du texte reçu, et on répond avec un
-# NOUVEAU message (impossible d'éditer le précédent comme avec un
-# clavier inline), en renvoyant systématiquement le clavier adapté.
+# Le clavier fixe envoie le libellé du bouton comme un message texte :
+# on fait donc du routage sur le texte reçu.
 
-async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+TEXT_BUTTONS = {
+    BTN_LAST_ALERTS: text_last_alerts,
+    BTN_PING_NMAP: text_ping_nmap,
+    BTN_MALICIOUS: text_malicious,
+    BTN_BLOCKED: text_blocked,
+}
+
+
+async def button_handler(update, ctx):
     text = (update.message.text or "").strip()
 
-    if text == BTN_LAST_ALERTS:
-        await update.message.reply_text(
-            text_last_alerts(), parse_mode="HTML", reply_markup=build_main_menu()
-        )
-
-    elif text == BTN_PING_NMAP:
-        await update.message.reply_text(
-            text_ping_nmap(), parse_mode="HTML", reply_markup=build_main_menu()
-        )
-
-    elif text == BTN_MALICIOUS:
-        await update.message.reply_text(
-            text_malicious(), parse_mode="HTML", reply_markup=build_main_menu()
-        )
-
-    elif text == BTN_BLOCKED:
-        await update.message.reply_text(
-            text_blocked(), parse_mode="HTML", reply_markup=build_main_menu()
-        )
+    if text in TEXT_BUTTONS:
+        await _reply(update, await asyncio.to_thread(TEXT_BUTTONS[text]))
 
     elif text == BTN_REFRESH:
-        await update.message.reply_text(
-            "🔄  Menu actualisé.", reply_markup=build_main_menu()
-        )
+        await _reply(update, "🔄  Menu actualisé.")
 
     elif text == BTN_UNBLOCK:
-        ips = get_blocked_ips_list()
-        if not ips:
-            await update.message.reply_text(
-                "✅  Aucune IP bloquée pour le moment.",
-                reply_markup=build_main_menu()
-            )
+        markup = await asyncio.to_thread(build_unblock_menu)
+        if markup.keyboard and len(markup.keyboard) > 1:
+            await _reply(update, "🔓  <b>Choisis une IP à débloquer :</b>", markup)
         else:
-            await update.message.reply_text(
-                "🔓  <b>Choisis une IP à débloquer :</b>",
-                parse_mode="HTML",
-                reply_markup=build_unblock_menu()
-            )
+            await _reply(update, "✅  Aucune IP bloquée pour le moment.")
 
     elif text == BTN_BACK:
-        await update.message.reply_text(
-            "🛡️  Menu principal.", reply_markup=build_main_menu()
-        )
+        await _reply(update, "🛡️  Menu principal.")
 
     elif text == BTN_UNBLOCK_ALL:
-        subprocess.run([IPTABLES, "-F", CHAIN], capture_output=True)
-        blocked_ips.clear()
-        alert_count.clear()
-        log.info("Toutes les IPs débloquées via Telegram.")
-        if MAIL_ON_UNBLOCK:
-            s, b = make_email_unblock("TOUTES")
-            send_email(s, b)
-        await update.message.reply_text(
-            "✅  Toutes les IPs ont été débloquées !",
-            parse_mode="HTML",
-            reply_markup=build_main_menu()
-        )
+        count = await asyncio.to_thread(unblock_all)
+        await _reply(update, f"✅  {count} IP(s) débloquée(s) — toutes les règles ont été retirées.")
 
     elif text.startswith(UNBLOCK_PREFIX):
-        ip_to_unblock = text.replace(UNBLOCK_PREFIX, "").strip()
-        subprocess.run(
-            [IPTABLES, "-D", CHAIN, "-s", ip_to_unblock, "-j", "DROP"],
-            capture_output=True
-        )
-        blocked_ips.discard(ip_to_unblock)
-        alert_count.pop(ip_to_unblock, None)
-        log.info(f"IP {ip_to_unblock} débloquée via Telegram.")
-        if MAIL_ON_UNBLOCK:
-            s, b = make_email_unblock(ip_to_unblock)
-            send_email(s, b)
-
-        remaining = get_blocked_ips_list()
+        ip = text[len(UNBLOCK_PREFIX):].strip()
+        if not is_ipv4(ip):
+            await _reply(update, "❓  Adresse IP invalide.")
+            return
+        ok = await asyncio.to_thread(unblock_ip, ip)
+        remaining = await asyncio.to_thread(get_blocked_ips_list)
+        head = (f"✅  IP <code>{_esc(ip)}</code> débloquée !" if ok
+                else f"ℹ️  <code>{_esc(ip)}</code> n'était pas bloquée.")
         if remaining:
-            await update.message.reply_text(
-                f"✅  IP <code>{ip_to_unblock}</code> débloquée !\n"
-                f"🔓  Il reste {len(remaining)} IP(s) bloquée(s).",
-                parse_mode="HTML",
-                reply_markup=build_unblock_menu()
-            )
+            await _reply(update, f"{head}\n🔓  Il reste {len(remaining)} IP(s) bloquée(s).",
+                         await asyncio.to_thread(build_unblock_menu))
         else:
-            await update.message.reply_text(
-                f"✅  IP <code>{ip_to_unblock}</code> débloquée !\n"
-                f"🎉  Plus aucune IP bloquée.",
-                parse_mode="HTML",
-                reply_markup=build_main_menu()
-            )
+            await _reply(update, f"{head}\n🎉  Plus aucune IP bloquée.")
 
     else:
-        # Texte non reconnu (l'utilisateur a tapé autre chose qu'un bouton)
-        await update.message.reply_text(
-            "❓  Utilise les boutons ci-dessous 👇 ou tape /menu.",
-            reply_markup=build_main_menu()
-        )
-
-# ╔══════════════════════════════════════════════════════════════╗
-# ║                      IPTABLES                               ║
-# ╚══════════════════════════════════════════════════════════════╝
-
-def run_cmd(cmd: list) -> bool:
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        log.error(f"Échec: {' '.join(cmd)} → {e.stderr.decode().strip()}")
-        return False
+        await _reply(update, "❓  Utilise les boutons ci-dessous 👇 ou tape /menu.")
 
 
-def setup_chain():
-    subprocess.run([IPTABLES, "-N", CHAIN], capture_output=True)
-    res = subprocess.run([IPTABLES, "-C", "INPUT", "-j", CHAIN], capture_output=True)
-    if res.returncode != 0:
-        run_cmd([IPTABLES, "-I", "INPUT",   "1", "-j", CHAIN])
-        run_cmd([IPTABLES, "-I", "FORWARD", "1", "-j", CHAIN])
-    log.info(f"Chaîne iptables '{CHAIN}' prête.")
-
-
-def block_ip(ip: str, reason: str, alert_msg: str = ""):
-    """Bloque IP + envoie Telegram + envoie Mail simultanément."""
-    if ip in blocked_ips or ip in WHITELIST:
-        return
-    blocked_ips.add(ip)
-    alert_count.pop(ip, None)
-
-    run_cmd([IPTABLES, "-A", CHAIN, "-s", ip, "-j", "DROP"])
-    log.warning(f"BLOQUÉ  {ip:<20} | {reason}")
-
-    ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    with open(BLOCKED_LOG, "a") as f:
-        f.write(f"{datetime.now().isoformat()} | BLOCKED | {ip} | {reason}\n")
-
-    # ── Telegram (immédiat) ──
-    tg_send(
-        f"🚨 <b>ALERTE — IP BLOQUÉE</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌐 IP     : <code>{ip}</code>\n"
-        f"📌 Détect : {alert_msg or reason}\n"
-        f"🔒 Action : DROP immédiat\n"
-        f"🕐 {ts}"
-    )
-
-    # ── Email (thread séparé pour ne pas ralentir) ──
-    if MAIL_ON_BLOCK:
-        s, b = make_email_block(ip, alert_msg or reason, ts)
-        send_email(s, b)
+async def on_error(update, ctx):
+    log.error("Erreur dans un gestionnaire Telegram", exc_info=ctx.error)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -751,13 +771,22 @@ def block_ip(ip: str, reason: str, alert_msg: str = ""):
 # ╚══════════════════════════════════════════════════════════════╝
 
 def is_instant_block(msg: str) -> bool:
-    msg_up = msg.upper()
-    return any(kw in msg_up for kw in INSTANT_BLOCK_KEYWORDS)
+    return INSTANT_RE.search(msg) is not None
 
 
 def is_silent(msg: str) -> bool:
-    msg_up = msg.upper()
-    return any(kw in msg_up for kw in SILENT_KEYWORDS)
+    return SILENT_RE.search(msg) is not None
+
+
+def classify(msg: str) -> str:
+    """« instant » (blocage), « silent » (/ping) ou « normal » (seuil).
+    Le blocage immédiat est testé AVANT le silencieux : sinon « ICMP FLOOD »
+    serait classé comme simple ping et ne serait jamais bloqué."""
+    if is_instant_block(msg):
+        return "instant"
+    if is_silent(msg):
+        return "silent"
+    return "normal"
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -769,44 +798,45 @@ def process_line(line: str):
     if not m:
         return
 
-    ts     = m.group(1)
-    msg    = m.group(2).strip()
-    proto  = m.group(3).strip()
-    src_ip = m.group(4).strip()
-    dst_ip = m.group(5).strip()
-
+    ts, msg, proto, src_ip, dst_ip = (
+        m.group(1), m.group(2).strip(), m.group(3).strip(),
+        m.group(4).strip(), m.group(5).strip(),
+    )
     entry = {"time": ts, "msg": msg, "proto": proto, "src": src_ip, "dst": dst_ip}
 
-    # ── PING silencieux ──
-    if is_silent(msg):
-        ping_alerts.append(entry)
-        if len(ping_alerts) > MAX_PING_MEM:
-            ping_alerts.pop(0)
+    with STATE_LOCK:
         recent_alerts.append(entry)
-        if len(recent_alerts) > MAX_ALERTS_MEM:
-            recent_alerts.pop(0)
+
+    kind = classify(msg)
+    if kind == "silent":
+        with STATE_LOCK:
+            ping_alerts.append(entry)
         log.info(f"PING silencieux {src_ip:<20} (/ping pour voir)")
         return
 
-    recent_alerts.append(entry)
-    if len(recent_alerts) > MAX_ALERTS_MEM:
-        recent_alerts.pop(0)
-
-    if src_ip in WHITELIST or src_ip in blocked_ips:
+    with STATE_LOCK:
+        skip = src_ip in WHITELIST or src_ip in blocked_ips
+    if skip:
+        return
+    if not is_ipv4(src_ip):
+        log.info(f"Alerte IPv6 ignorée pour le blocage : {src_ip} | {msg}")
         return
 
-    # ── Blocage immédiat ──
-    if is_instant_block(msg):
+    if kind == "instant":
         log.warning(f"INSTANT BLOCK {src_ip:<20} | {msg}")
         block_ip(src_ip, f"INSTANT [{msg}]", msg)
         return
 
-    # ── Compteur seuil ──
-    alert_count[src_ip] += 1
-    count = alert_count[src_ip]
+    now = time.time()
+    with STATE_LOCK:
+        hits = alert_hits[src_ip]
+        hits.append(now)
+        while hits and now - hits[0] > ALERT_WINDOW:
+            hits.popleft()
+        count = len(hits)
     log.info(f"Alerte {count:>3}/{ALERT_THRESHOLD}  {src_ip:<20} | {msg}")
     if count >= ALERT_THRESHOLD:
-        block_ip(src_ip, f"SEUIL ({count} alertes) [{msg}]", msg)
+        block_ip(src_ip, f"SEUIL ({count} alertes en {ALERT_WINDOW}s) [{msg}]", msg)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -818,14 +848,30 @@ def monitor_loop():
     while not os.path.exists(FAST_LOG):
         time.sleep(2)
     log.info(f"Surveillance active : {FAST_LOG}")
-    with open(FAST_LOG, "r") as f:
-        f.seek(0, 2)
-        while True:
+
+    f = open(FAST_LOG, "r", encoding="utf-8", errors="replace")
+    f.seek(0, os.SEEK_END)
+    inode = os.stat(FAST_LOG).st_ino
+    while True:
+        try:
             line = f.readline()
             if line:
                 process_line(line)
-            else:
-                time.sleep(0.05)   # polling 50ms
+                continue
+            time.sleep(0.05)  # polling 50 ms
+
+            # Rotation (logrotate) ou troncature : sans ça on ne lirait plus rien.
+            st = os.stat(FAST_LOG)
+            if st.st_ino != inode or st.st_size < f.tell():
+                log.info("fast.log a tourné, réouverture du fichier.")
+                f.close()
+                f = open(FAST_LOG, "r", encoding="utf-8", errors="replace")
+                inode = st.st_ino
+        except FileNotFoundError:
+            time.sleep(2)
+        except Exception as e:  # ne jamais laisser mourir la surveillance
+            log.error(f"Erreur surveillance : {e}")
+            time.sleep(1)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -833,7 +879,7 @@ def monitor_loop():
 # ╚══════════════════════════════════════════════════════════════╝
 
 def graceful_exit(sig, frame):
-    log.info("Arrêt propre. Les règles iptables restent en place.")
+    log.info("Arrêt propre. Les règles iptables restent en place (voir README).")
     sys.exit(0)
 
 
@@ -841,68 +887,75 @@ async def post_init(app):
     global _bot_loop
     _bot_loop = asyncio.get_running_loop()
     await app.bot.set_my_commands([
-        BotCommand("start",   "Demarrer et epingler le menu"),
-        BotCommand("menu",    "Afficher le menu"),
-        BotCommand("ping",    "Alertes Ping / ICMP"),
-        BotCommand("nmap",    "Scans NMAP detectes"),
-        BotCommand("blocked", "IPs bloquees"),
-        BotCommand("logs",    "Derniers logs Suricata"),
-        BotCommand("about",   "A propos de l'outil"),
+        BotCommand("start", "Démarrer et épingler le menu"),
+        BotCommand("menu", "Afficher le menu"),
+        BotCommand("ping", "Alertes Ping / ICMP"),
+        BotCommand("nmap", "Scans NMAP détectés"),
+        BotCommand("blocked", "IPs bloquées"),
+        BotCommand("logs", "Derniers logs Suricata"),
+        BotCommand("about", "À propos de l'outil"),
     ])
+    try:
+        await app.bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=(f"🛡️ <b>Suricata Guard démarré</b>\n"
+                  f"📧 Mails : {'✅ activés' if EMAIL_ENABLED else '❌ désactivés'}\n"
+                  f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+                  f"🔰 by <b>{TOOL_SIGNATURE}</b>"),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        log.error(f"Notification de démarrage Telegram impossible : {e}")
+
+
+def run_telegram():
+    global _telegram_app
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+    _telegram_app = app
+
+    for name, handler in (
+        ("start", cmd_start), ("menu", cmd_menu), ("ping", cmd_ping), ("nmap", cmd_nmap),
+        ("blocked", cmd_blocked), ("logs", cmd_logs), ("about", cmd_about),
+    ):
+        app.add_handler(CommandHandler(name, handler, filters=CHAT_FILTER))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & CHAT_FILTER, button_handler))
+    app.add_error_handler(on_error)
+
+    log.info("Bot Telegram démarré — tape /start dans Telegram")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 def main():
-    global _telegram_app
-
     if os.geteuid() != 0:
         print("Lance en root (sudo).")
         sys.exit(1)
 
-    signal.signal(signal.SIGINT,  graceful_exit)
-    signal.signal(signal.SIGTERM, graceful_exit)
-
-    setup_chain()
-
+    setup_logging()
     log.info("══════════════════════════════════════════")
-    log.info("  suricata_guard.py  -  DEMARRE     ")
-    log.info(f"  Seuil blocage : {ALERT_THRESHOLD} alertes")
-    log.info(f"  Email activé  : {EMAIL_ENABLED} ({EMAIL_PROVIDER})")
-    log.info(f"  Email vers    : {EMAIL_TO}")
+    log.info(f"  suricata_guard.py v{VERSION} - DÉMARRE")
+    log.info(f"  Seuil blocage : {ALERT_THRESHOLD} alertes / {ALERT_WINDOW} s")
+    log.info(f"  Telegram      : {'activé' if TELEGRAM_ENABLED else 'désactivé'}")
+    log.info(f"  Email         : {'activé' if EMAIL_ENABLED else 'désactivé'} ({EMAIL_PROVIDER})")
     log.info(f"  Signé         : {TOOL_SIGNATURE} ({TOOL_AUTHOR_FULL})")
     log.info("══════════════════════════════════════════")
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
-    _telegram_app = app
-
-    app.add_handler(CommandHandler("start",   cmd_start))
-    app.add_handler(CommandHandler("menu",    cmd_menu))
-    app.add_handler(CommandHandler("ping",    cmd_ping))
-    app.add_handler(CommandHandler("nmap",    cmd_nmap))
-    app.add_handler(CommandHandler("blocked", cmd_blocked))
-    app.add_handler(CommandHandler("logs",    cmd_logs))
-    app.add_handler(CommandHandler("about",   cmd_about))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, button_handler))
-
-    # Mail de démarrage
+    setup_chain()
     if MAIL_ON_START:
-        s, b = make_email_start()
-        send_email(s, b)
+        send_email(*make_email_start())
 
-    # Notification Telegram de démarrage
-    threading.Thread(
-        target=lambda: (time.sleep(3), tg_send(
-            "🛡️ <b>Suricata Guard démarré</b>\n"
-            f"📧 Notifications mail : {'✅ Activées' if EMAIL_ENABLED else '❌ Désactivées'}\n"
-            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
-            f"🔰 by <b>{TOOL_SIGNATURE}</b>"
-        )),
-        daemon=True
-    ).start()
+    threading.Thread(target=monitor_loop, daemon=True, name="monitor").start()
 
-    threading.Thread(target=monitor_loop, daemon=True).start()
-
-    log.info("Bot Telegram démarré — tape /start dans Telegram")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    if TELEGRAM_ENABLED and TELEGRAM_AVAILABLE:
+        run_telegram()  # bloquant : gère Ctrl+C / SIGTERM proprement
+    else:
+        if TELEGRAM_ENABLED:
+            log.error("python-telegram-bot est absent : Telegram désactivé.")
+        else:
+            log.info("Telegram désactivé : blocage et mails uniquement.")
+        signal.signal(signal.SIGINT, graceful_exit)
+        signal.signal(signal.SIGTERM, graceful_exit)
+        while True:
+            time.sleep(3600)
 
 
 if __name__ == "__main__":

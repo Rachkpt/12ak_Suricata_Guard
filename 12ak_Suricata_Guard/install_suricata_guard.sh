@@ -24,10 +24,14 @@ RULES_SRC="${WORKDIR}/local.rules"
 
 PY_SCRIPT_DST="/opt/suricata-guard/suricata_guard.py"
 PY_VENV="/opt/suricata-guard/venv"
+CONFIG_DIR="/etc/suricata-guard"
+CONFIG_FILE="${CONFIG_DIR}/config.json"
 SURICATA_RULES_DIR="/etc/suricata/rules"
 SURICATA_YAML="/etc/suricata/suricata.yaml"
 SYSTEMD_GUARD="/etc/systemd/system/suricata-guard.service"
+LOGROTATE_FILE="/etc/logrotate.d/suricata-guard"
 INSTALL_LOG="/var/log/suricata_guard_install.log"
+UNINSTALL_SRC="${WORKDIR}/uninstall_suricata_guard.sh"
 
 # ───────────────────────── FONCTIONS UI ──────────────────────────────
 
@@ -222,7 +226,7 @@ detect_default_iface() {
 
 collect_user_inputs() {
     step "Configuration interactive — réponds aux questions ci-dessous"
-    echo -e "  ${CYA}Toutes ces infos seront injectées automatiquement dans le script.${NC}"
+    echo -e "  ${CYA}Tes réponses sont enregistrées dans ${CONFIG_FILE} (accès root uniquement).${NC}"
     echo -e "  ${CYA}Rien à modifier à la main après l'installation.${NC}"
     echo ""
 
@@ -238,7 +242,8 @@ collect_user_inputs() {
     # ── Seuil d'alerte ────────────────────────────────────────────
     echo ""
     echo -e "${BLD}── Seuil de blocage ──${NC}"
-    ask "Nombre d'alertes avant blocage automatique d'une IP" "5"
+    echo -e "  ${CYA}Les scans NMAP et DDoS sont bloqués dès la 1re alerte ; le seuil concerne les autres alertes.${NC}"
+    ask "Nombre d'alertes sur 10 minutes avant blocage automatique d'une IP" "5"
     ALERT_THRESHOLD="$REPLY_VAL"
 
     # ── Telegram ──────────────────────────────────────────────────
@@ -250,10 +255,16 @@ collect_user_inputs() {
     if [ "$TELEGRAM_ENABLED" = "o" ]; then
         ask_secret "Token du bot Telegram (depuis @BotFather)"
         TELEGRAM_TOKEN="$REPLY_VAL"
-        ask "Ton chat_id Telegram (numérique, depuis @userinfobot)" ""
-        TELEGRAM_CHAT_ID="$REPLY_VAL"
+        while true; do
+            ask "Ton chat_id Telegram (numérique, depuis @userinfobot)" ""
+            if [[ "$REPLY_VAL" =~ ^-?[0-9]+$ ]]; then
+                TELEGRAM_CHAT_ID="$REPLY_VAL"
+                break
+            fi
+            echo -e "    ${YEL}→ Le chat_id doit être un nombre (ex. 123456789).${NC}"
+        done
     else
-        TELEGRAM_TOKEN="DISABLED"
+        TELEGRAM_TOKEN=""
         TELEGRAM_CHAT_ID="0"
     fi
 
@@ -310,8 +321,17 @@ collect_user_inputs() {
     echo ""
     echo -e "${BLD}── Whitelist (IPs jamais bloquées) ──${NC}"
     echo -e "  ${CYA}127.0.0.1 et ::1 sont déjà protégées par défaut.${NC}"
+    WHITELIST_RAW=""
+    # Si tu es connecté en SSH, ton IP ne doit JAMAIS être bloquée (sinon tu te coupes toi-même)
+    SSH_IP="${SSH_CLIENT%% *}"
+    if [ -n "$SSH_IP" ]; then
+        ask_yn "Ajouter ton IP SSH actuelle ($SSH_IP) à la whitelist (recommandé)" "o"
+        [ "$REPLY_YN" = "o" ] && WHITELIST_RAW="$SSH_IP"
+    fi
     ask "IPs supplémentaires à whitelister (séparées par une virgule, vide = aucune)" ""
-    WHITELIST_RAW="$REPLY_VAL"
+    if [ -n "$REPLY_VAL" ]; then
+        WHITELIST_RAW="${WHITELIST_RAW:+$WHITELIST_RAW,}$REPLY_VAL"
+    fi
 
     echo ""
     echo -e "${GRN}${BLD}✔ Configuration collectée. Récapitulatif :${NC}"
@@ -451,79 +471,124 @@ configure_iptables() {
 #   ÉTAPE 5 — DÉPLOIEMENT DU SCRIPT PYTHON (suricata_guard.py)
 # ════════════════════════════════════════════════════════════════════
 
+write_config() {
+    step "Écriture de la configuration (fichier root, mode 600)"
+
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
+
+    # Les valeurs passent par l'environnement : pas d'interpolation dans le code Python,
+    # donc un mot de passe contenant " ' ou \ ne peut plus casser la configuration.
+    export SG_THRESHOLD="$ALERT_THRESHOLD"
+    export SG_TG_ENABLED="$TELEGRAM_ENABLED"
+    export SG_TG_TOKEN="$TELEGRAM_TOKEN"
+    export SG_TG_CHAT_ID="$TELEGRAM_CHAT_ID"
+    export SG_MAIL_ENABLED="$EMAIL_ENABLED"
+    export SG_MAIL_PROVIDER="$EMAIL_PROVIDER"
+    export SG_MAIL_FROM="$EMAIL_FROM"
+    export SG_MAIL_PASSWORD="$EMAIL_PASSWORD"
+    export SG_MAIL_TO="$EMAIL_TO_RAW"
+    export SG_SMTP_HOST="$SMTP_HOST"
+    export SG_SMTP_PORT="$SMTP_PORT"
+    export SG_SMTP_TLS="$SMTP_USE_TLS"
+    export SG_WHITELIST="$WHITELIST_RAW"
+    export SG_IFACE="$IFACE"
+
+    python3 - "$CONFIG_FILE" << 'PYEOF'
+import ipaddress, json, os, sys
+
+env = os.environ.get
+
+def split(raw):
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+whitelist = split(env("SG_WHITELIST", ""))
+bad = []
+for ip in whitelist:
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        bad.append(ip)
+if bad:
+    sys.exit(f"Adresse(s) IP invalide(s) dans la whitelist : {', '.join(bad)}")
+
+try:
+    chat_id = int(env("SG_TG_CHAT_ID", "0") or 0)
+    threshold = int(env("SG_THRESHOLD", "5"))
+except ValueError:
+    sys.exit("Chat ID ou seuil non numérique")
+
+cfg = {
+    "alert_threshold": threshold,
+    "alert_window_seconds": 600,
+    "fast_log": "/var/log/suricata/fast.log",
+    "interface": env("SG_IFACE", ""),
+    "telegram_enabled": env("SG_TG_ENABLED") == "o",
+    "telegram_token": env("SG_TG_TOKEN", ""),
+    "telegram_chat_id": chat_id,
+    "email_enabled": env("SG_MAIL_ENABLED") == "o",
+    "email_provider": env("SG_MAIL_PROVIDER", "gmail"),
+    "email_from": env("SG_MAIL_FROM", ""),
+    "email_password": env("SG_MAIL_PASSWORD", ""),
+    "email_to": split(env("SG_MAIL_TO", "")),
+    "smtp_host": env("SG_SMTP_HOST", ""),
+    "smtp_port": int(env("SG_SMTP_PORT", "587") or 587),
+    "smtp_use_tls": env("SG_SMTP_TLS") == "True",
+    "whitelist": whitelist,
+}
+
+path = sys.argv[1]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+print("ok")
+PYEOF
+    local rc=$?
+    unset SG_THRESHOLD SG_TG_ENABLED SG_TG_TOKEN SG_TG_CHAT_ID SG_MAIL_ENABLED SG_MAIL_PROVIDER \
+          SG_MAIL_FROM SG_MAIL_PASSWORD SG_MAIL_TO SG_SMTP_HOST SG_SMTP_PORT SG_SMTP_TLS SG_WHITELIST SG_IFACE
+    [ $rc -eq 0 ] || die "Configuration invalide (voir les messages ci-dessus)"
+
+    chmod 600 "$CONFIG_FILE"
+    chown root:root "$CONFIG_FILE"
+    ok "Configuration enregistrée : $CONFIG_FILE (600, root)"
+}
+
 deploy_python_script() {
-    step "Déploiement de suricata_guard.py avec ta configuration"
+    step "Déploiement de suricata_guard.py"
 
     mkdir -p "$(dirname "$PY_SCRIPT_DST")"
     cp "$PY_SCRIPT_SRC" "$PY_SCRIPT_DST"
-    ok "Script copié vers $PY_SCRIPT_DST"
-
-    # Construction de la liste EMAIL_TO en JSON-like Python list
-    local email_to_py
-    email_to_py=$(python3 -c "
-import sys
-raw = sys.argv[1]
-items = [x.strip() for x in raw.split(',') if x.strip()]
-print(repr(items))
-" "$EMAIL_TO_RAW")
-
-    # Construction du bloc whitelist supplémentaire
-    local whitelist_py=""
-    if [ -n "$WHITELIST_RAW" ]; then
-        whitelist_py=$(python3 -c "
-import sys
-raw = sys.argv[1]
-items = [x.strip() for x in raw.split(',') if x.strip()]
-print('\n'.join(f'    \"{ip}\",' for ip in items))
-" "$WHITELIST_RAW")
-    fi
-
-    local email_enabled_py="False"
-    [ "$EMAIL_ENABLED" = "o" ] && email_enabled_py="True"
-
-    # Injection des valeurs via Python (plus sûr que sed pour échapper les caractères spéciaux)
-    python3 - "$PY_SCRIPT_DST" << PYEOF
-import re
-
-path = "$PY_SCRIPT_DST"
-with open(path, "r", encoding="utf-8") as f:
-    content = f.read()
-
-replacements = {
-    "__ALERT_THRESHOLD__": "$ALERT_THRESHOLD",
-    "__TELEGRAM_TOKEN__": "$TELEGRAM_TOKEN",
-    "__TELEGRAM_CHAT_ID__": "$TELEGRAM_CHAT_ID",
-    "__EMAIL_ENABLED__": "$email_enabled_py",
-    "__EMAIL_PROVIDER__": "$EMAIL_PROVIDER",
-    "__EMAIL_FROM__": "$EMAIL_FROM",
-    "__EMAIL_PASSWORD__": "$EMAIL_PASSWORD",
-    "__EMAIL_TO__": '''$email_to_py''',
-    "__SMTP_HOST__": "$SMTP_HOST",
-    "__SMTP_PORT__": "$SMTP_PORT",
-    "__SMTP_USE_TLS__": "$SMTP_USE_TLS",
-    "__WHITELIST_IPS__": '''$whitelist_py''',
-}
-
-for placeholder, value in replacements.items():
-    content = content.replace(placeholder, value)
-
-with open(path, "w", encoding="utf-8") as f:
-    f.write(content)
-PYEOF
-
-    if grep -q "__.*__" "$PY_SCRIPT_DST" 2>/dev/null && grep -qE "__[A-Z_]+__" "$PY_SCRIPT_DST"; then
-        warn "Certains placeholders n'ont peut-être pas été remplacés, vérifie $PY_SCRIPT_DST"
-    else
-        ok "Tous les paramètres ont été injectés dans le script"
-    fi
-
-    python3 -c "import ast; ast.parse(open('$PY_SCRIPT_DST').read())" \
+    python3 -m py_compile "$PY_SCRIPT_DST" 2>/dev/null \
         && ok "Script Python validé syntaxiquement" \
-        || die "Le script Python généré contient une erreur de syntaxe"
+        || die "Le script Python contient une erreur de syntaxe"
+    rm -rf "$(dirname "$PY_SCRIPT_DST")/__pycache__"
 
     chmod 700 "$PY_SCRIPT_DST"
     chown root:root "$PY_SCRIPT_DST"
-    ok "Permissions sécurisées appliquées (700, root:root)"
+    ok "Script copié vers $PY_SCRIPT_DST (700, root:root)"
+
+    # Script de désinstallation toujours disponible sur le serveur
+    if [ -f "$UNINSTALL_SRC" ]; then
+        cp "$UNINSTALL_SRC" "$(dirname "$PY_SCRIPT_DST")/uninstall_suricata_guard.sh"
+        chmod 700 "$(dirname "$PY_SCRIPT_DST")/uninstall_suricata_guard.sh"
+        ok "Désinstalleur copié dans $(dirname "$PY_SCRIPT_DST")/"
+    fi
+
+    # Rotation des journaux (copytruncate : le bot détecte aussi la troncature)
+    cat > "$LOGROTATE_FILE" << LREOF
+/var/log/suricata_guard.log
+/var/log/suricata_blocked.log
+/var/log/suricata_guard_service.log
+{
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+LREOF
+    ok "Rotation des logs configurée : $LOGROTATE_FILE"
 }
 
 setup_python_venv() {
@@ -614,8 +679,10 @@ EOF
     echo ""
     echo -e "  ${BLD}Commandes utiles :${NC}"
     echo -e "    ${YEL}journalctl -u suricata-guard -f${NC}      → suivre les logs en direct"
-    echo -e "    ${YEL}iptables -L SURICATA_GUARD -n${NC}        → voir les IPs bloquées"
+    echo -e "    ${YEL}iptables -S SURICATA_GUARD${NC}           → voir les IPs bloquées"
     echo -e "    ${YEL}systemctl restart suricata-guard${NC}     → redémarrer le bot"
+    echo -e "    ${YEL}systemctl stop suricata-guard${NC}        → arrêter le bot (les blocages restent)"
+    echo -e "    ${YEL}bash /opt/suricata-guard/uninstall_suricata_guard.sh${NC}  → tout arrêter et supprimer"
     echo ""
     if [ "$TELEGRAM_ENABLED" = "o" ]; then
         echo -e "  ${GRN}→ Va sur Telegram et envoie /start à ton bot pour voir le menu.${NC}"
@@ -649,6 +716,7 @@ main() {
     install_system_packages
     configure_suricata
     configure_iptables
+    write_config
     deploy_python_script
     setup_python_venv
     create_systemd_service
