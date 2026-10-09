@@ -78,7 +78,7 @@ alert tcp any any -> any [80,443,8080] (msg:"XSS - Tentative cross-site scriptin
 # ── TLS : nombreux handshakes (sslscan, testssl) ───────────────
 # Compté sur les ClientHello (tls.sni), pas sur chaque paquet : sinon un navigateur
 # normal déclenche le blocage immédiat.
-alert tls any any -> any 443 (msg:"TLS HANDSHAKES MULTIPLES - sondage SSL"; flow:to_server; tls.sni; threshold:type threshold, track by_src, count 30, seconds 60; classtype:attempted-recon; sid:3400210; priority:2; rev:2;)
+alert tls any any -> any 443 (msg:"TLS HANDSHAKES MULTIPLES - sondage SSL"; flow:to_server; tls.sni; content:"."; threshold:type threshold, track by_src, count 30, seconds 60; classtype:attempted-recon; sid:3400210; priority:2; rev:3;)
 
 # ── WEBSHELL / BACKDOOR ACCESS ─────────────────────────────────────
 alert tcp any any -> any [80,443,8080] (msg:"WEBSHELL - Acces fichier suspect (.php cmd/shell)"; flow:to_server,established; http.uri; content:".php"; nocase; pcre:"/\/(shell|cmd|webshell|c99|r57)\.php/i"; classtype:web-application-attack; sid:3400220; priority:1; rev:2;)
