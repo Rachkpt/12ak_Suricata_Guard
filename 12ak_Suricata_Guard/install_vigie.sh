@@ -323,7 +323,7 @@ collect_user_inputs() {
     echo -e "  ${CYA}127.0.0.1 et ::1 sont déjà protégées par défaut.${NC}"
     WHITELIST_RAW=""
     # Si tu es connecté en SSH, ton IP ne doit JAMAIS être bloquée (sinon tu te coupes toi-même)
-    SSH_IP="${SSH_CLIENT%% *}"
+    SSH_IP="${SSH_CLIENT:-}"; SSH_IP="${SSH_IP%% *}"
     if [ -n "$SSH_IP" ]; then
         ask_yn "Ajouter ton IP SSH actuelle ($SSH_IP) à la whitelist (recommandé)" "o"
         [ "$REPLY_YN" = "o" ] && WHITELIST_RAW="$SSH_IP"
