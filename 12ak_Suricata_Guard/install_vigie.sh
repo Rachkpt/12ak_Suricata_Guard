@@ -425,16 +425,20 @@ PYEOF
     cp "$RULES_SRC" "${SURICATA_RULES_DIR}/local.rules"
     ok "Règles personnalisées copiées vers ${SURICATA_RULES_DIR}/local.rules"
 
-    # S'assurer que local.rules est chargé dans la liste des règles
-    if grep -q "local.rules" "$SURICATA_YAML"; then
-        ok "local.rules déjà référencé dans suricata.yaml"
+    # S'assurer que local.rules est chargé dans la liste des règles.
+    # On référence le CHEMIN ABSOLU : les entrées relatives de rule-files sont
+    # résolues depuis default-rule-path (/var/lib/suricata/rules), pas depuis
+    # /etc/suricata/rules — ce qui provoquait "No rule files match the pattern".
+    RULE_ENTRY="${SURICATA_RULES_DIR}/local.rules"
+    # Nettoie une éventuelle entrée relative "- local.rules" ajoutée par une version précédente
+    sed -i '/^[[:space:]]*-[[:space:]]*local\.rules[[:space:]]*$/d' "$SURICATA_YAML"
+    if grep -qF "$RULE_ENTRY" "$SURICATA_YAML"; then
+        ok "local.rules déjà référencé (chemin absolu) dans suricata.yaml"
+    elif grep -q "^rule-files:" "$SURICATA_YAML"; then
+        sed -i "/^rule-files:/a\\  - ${RULE_ENTRY}" "$SURICATA_YAML"
+        ok "local.rules (chemin absolu) ajouté à rule-files dans suricata.yaml"
     else
-        if grep -q "^rule-files:" "$SURICATA_YAML"; then
-            sed -i '/^rule-files:/a\  - local.rules' "$SURICATA_YAML"
-            ok "local.rules ajouté à rule-files dans suricata.yaml"
-        else
-            warn "Section rule-files non trouvée — ajoute manuellement 'local.rules' à rule-files"
-        fi
+        warn "Section rule-files non trouvée — ajoute manuellement '${RULE_ENTRY}' à rule-files"
     fi
 
     spinner_run "Mise à jour des règles Suricata (suricata-update)" suricata-update || true
